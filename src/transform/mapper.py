@@ -19,8 +19,13 @@ INTERMEDIATE_DIR = os.path.join("data", "intermediate")
 
 def safe_str(x):
     """Return a clean string or empty string if NaN/None, stripping whitespace."""
-    if x is None or (isinstance(x, float) and pd.isna(x)):
+    # pd.isna also covers pd.NA (missing Int64) and NaT (missing date), which str() would
+    # turn into the text "<NA>" / "NaT" and write into the graph as a real value.
+    if x is None or (not isinstance(x, (list, dict, tuple, set)) and pd.isna(x)):
         return ""
+    if isinstance(x, pd.Timestamp):
+        # xsd:date wants 2026-02-03, not "2026-02-03 00:00:00"
+        return x.date().isoformat() if x == x.normalize() else x.isoformat()
     s = str(x).strip()
     return s if s else ""
 
@@ -168,6 +173,14 @@ def save_triples_to_file(df: pd.DataFrame, filename: str = "output.nt") -> str:
     Returns:
         str: The absolute path to the generated file.
     """
+    # 0. The file name must be a plain name, and the final path must stay inside the
+    #    intermediate directory (stops names like "../../x.nt", W3-04).
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}\.nt", filename):
+        raise ValueError(f"Unsafe output filename: {filename!r}")
+    base = os.path.realpath(INTERMEDIATE_DIR)
+    if os.path.commonpath([base, os.path.realpath(os.path.join(INTERMEDIATE_DIR, filename))]) != base:
+        raise ValueError(f"Output path escapes {INTERMEDIATE_DIR}: {filename!r}")
+
     # 1. Ensure intermediate directory exists
     os.makedirs(INTERMEDIATE_DIR, exist_ok=True)
     

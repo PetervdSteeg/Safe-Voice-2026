@@ -6,16 +6,30 @@ import numpy as np
 # --- CONFIGURATION ---
 # CDM file path
 CDM_FILE_PATH = 'config/CDM - Human Trafficking Sources EEPA.csv'
-# CDM Column data type conversion map list
+# CDM data type -> internal conversion type.
+# Keys are LOWER-CASE: the lookup lower-cases whatever the CDM says, so
+# "Integer", "integer" and " INTEGER " all work. The old title-case keys never
+# matched the lower-case CDM, so every column type came out as None (W1-01).
 TYPE_TRANSLATION = {
-    'Integer': 'INT',       
-    'String': 'STRING',   
-    'String (predefined)': 'STRING', 
-    'Date': 'DATE',        
-    'Decimal': 'FLOAT',      
-    'URL': 'STRING', 
+    'integer': 'INT',
+    'string': 'STRING',
+    'string (predefined)': 'STRING',
+    'date': 'DATE',
+    'float': 'FLOAT',
+    'decimal': 'FLOAT',        # old schema layout
+    'boolean': 'BOOL',
+    'url': 'STRING',
 }
 # ---------------------
+
+
+def translate_type(raw_type):
+    """Look up a CDM data type (case/whitespace-insensitive). Unknown types are reported, not silently dropped."""
+    key = str(raw_type).strip().lower()
+    result = TYPE_TRANSLATION.get(key)
+    if result is None:
+        print(f"[CLEANER] Warning: unknown CDM data type '{raw_type}'. Add it to TYPE_TRANSLATION.")
+    return result
 
 def normalize_name(s):
     """Converts CDM string (e.g., 'Record ID') to flat snake_case (e.g., 'record_id')."""
@@ -24,8 +38,19 @@ def normalize_name(s):
     return str(s).strip().lower().replace(' ', '_')
 
 def create_cdm_column_map(cdm_file_path):
+    """Return {flat column name: internal type} for every field in the CDM."""
+    return {col: fmt for col, fmt, _ in _read_cdm(cdm_file_path)}
+
+
+def create_required_columns(cdm_file_path):
+    """Return the flat column names the CDM marks Required = Yes (W1-02)."""
+    return [col for col, _, required in _read_cdm(cdm_file_path) if required]
+
+
+def _read_cdm(cdm_file_path):
     """
-    Reads the CDM csv file, forward-fills, and generates a single map:
+    Reads the CDM csv file and returns a list of (flat column name, internal type, is_required).
+    Flat names follow the JSON flattening in the UI: data_<level>_<field>.
     """
     try:
         # Using engine='python' and sep=None handles potential encoding/delimiter shifts smoothly
@@ -33,9 +58,9 @@ def create_cdm_column_map(cdm_file_path):
         print("[CLEANER] CDM Schema loaded successfully.")
     except Exception as e:
         print(f"[CLEANER] Could not load CDM schema. {e}")
-        return {} 
+        return []
 
-    flat_to_format_map = {} 
+    fields = []
     cdm = cdm_raw.copy()
     cdm.columns = cdm.columns.str.strip()
     
@@ -62,17 +87,17 @@ def create_cdm_column_map(cdm_file_path):
                 flat_col_name = normalized_field
             
             # Add 'data_' prefix to separate core data columns from metadata
-            if normalized_level in ['record', 'victim', 'incident']:
+            if normalized_level != 'updates':  # every data level lives under the JSON "data" key
                 flat_col_name = "data_" + flat_col_name
             
-            format_type = TYPE_TRANSLATION.get(data_type)
-            flat_to_format_map[flat_col_name] = format_type
-            
+            is_required = str(row.get('Required', '')).strip().lower() in ('yes', 'true', 'y')
+            fields.append((flat_col_name, translate_type(data_type), is_required))
+
     else:
         # --- OLD SCHEMA LAYOUT LOGIC (Fallback) ---
         if 'Level 1' not in cdm.columns:
             print(f"[CLEANER] CRITICAL ERROR: Neither 'Level' nor 'Level 1' columns found!")
-            return {}
+            return []
             
         cdm['Level 1'] = cdm['Level 1'].ffill()
         cdm['Level 2'] = cdm['Level 2'].ffill()
@@ -93,19 +118,23 @@ def create_cdm_column_map(cdm_file_path):
                 continue
             
             flat_col_name = "_".join(flat_parts)
-            if normalized_l1 in ['record', 'victim', 'incident']:
+            if normalized_l1 != 'updates':
                 flat_col_name = "data_" + flat_col_name
             
-            flat_to_format_map[flat_col_name] = TYPE_TRANSLATION.get(required_format)
-                  
-    return flat_to_format_map
+            # The old layout has no Required column, so nothing is required there.
+            fields.append((flat_col_name, translate_type(required_format), False))
 
-def clean_and_preprocess(df, flat_to_format_map):
+    return fields
+
+def clean_and_preprocess(df, flat_to_format_map, required_columns=None):
     """
-    Performs the data cleaning and pre-processing steps, including dropping data without id columns,
-    converting the data to correct data type based on format map, 
+    Performs the data cleaning and pre-processing steps, including dropping records
+    that lack a field the CDM marks as required,
+    converting the data to correct data type based on format map,
     and rounding the latitude and lontitude columns.
     """
+    if required_columns is None:
+        required_columns = create_required_columns(CDM_FILE_PATH)
     
     # --- Remove this part since data input is not csv anymore ---
     # 1. Handling Missing Values
@@ -115,24 +144,27 @@ def clean_and_preprocess(df, flat_to_format_map):
     # ------
     
     # 2. Drop rows where the critical ID columns are missing
-    # NOTE: The column names here must be accurate to the column names set in app.py.
+    # NOTE: The column names here must be accurate to the column names in config/field_crosswalk.csv.
     
     # Convert empty strings and whitespace to NaN
     df.replace(r'^\s*$', np.nan, regex=True, inplace=True)
-    # Drop rows where critical ID columns are missing
-    required_ids = ['data_record_record_id', 'data_victim_victim_id','data_trafficker_trafficker_id']
-    # Check if these columns exist before dropping
-    existing_ids = [col for col in required_ids if col in df.columns]
-    
-    if existing_ids:
-        df.dropna(subset=existing_ids, inplace=True)
-    else:
-        print("[CLEANER] Warning: Critical ID columns missing in input.")
-    
+    # Drop rows that lack a required field. The list comes from the CDM "Required"
+    # column, so it can no longer drift from the data model (W1-02).
+    absent = [col for col in required_columns if col not in df.columns]
+    if absent:
+        # The sender forgot a required field entirely: reject every row, loudly.
+        print(f"[CLEANER] Rejected: required columns missing from input: {absent}")
+        return df.iloc[0:0]
+    before = len(df)
+    df.dropna(subset=required_columns, inplace=True)
+    if len(df) < before:
+        print(f"[CLEANER] Dropped {before - len(df)} row(s) missing a required field.")
+
     STRING_COLUMNS = []
     INT_COLUMNS = []
     FLOAT_COLUMNS = []
     DATE_COLUMNS = []
+    BOOL_COLUMNS = []
 
     # 3. Convert the data to correct data type defined by the format map for further data processing steps
     for flat_col_name in df.columns:
@@ -148,7 +180,9 @@ def clean_and_preprocess(df, flat_to_format_map):
             FLOAT_COLUMNS.append(flat_col_name)
         elif required_format == 'DATE':
             DATE_COLUMNS.append(flat_col_name)
-            
+        elif required_format == 'BOOL':
+            BOOL_COLUMNS.append(flat_col_name)
+
     # Applying data type conversions
     
     # a. INTEGER Conversion
@@ -161,11 +195,17 @@ def clean_and_preprocess(df, flat_to_format_map):
     
     # c. DATE Conversion
     for col in DATE_COLUMNS:
-        # Use infer_datetime_format=True for flexibility in parsing JSON dates.
-        df[col] = pd.to_datetime(df[col], errors='coerce', infer_datetime_format=True)
-    
+        # Format inference has been the default since pandas 2.0; the old
+        # infer_datetime_format keyword was removed in pandas 3 (TypeError).
+        df[col] = pd.to_datetime(df[col], errors='coerce')
+
+    # d. BOOLEAN Conversion ("true"/"false" strings or real booleans; anything else becomes missing)
+    for col in BOOL_COLUMNS:
+        df[col] = (df[col].astype('string').str.strip().str.lower()
+                   .map({'true': True, 'false': False}).astype('boolean'))
+
     # 4. Anonymize the location information by rounding the latitude and longitude
-    # NOTE: The column names here must be accurate to the column names set in app.py.
+    # NOTE: The column names here must be accurate to the column names in config/field_crosswalk.csv.
     location_cols = [
         'data_victim_current_location_latitude',
         'data_victim_current_location_longitude',
@@ -190,7 +230,8 @@ def run_clean_pipeline(raw_df):
     # --- Execute Cleaning Steps ---
     
     cdm_column_map = create_cdm_column_map(CDM_FILE_PATH)
-    cleaned_df = clean_and_preprocess(raw_df, cdm_column_map) 
+    required_columns = create_required_columns(CDM_FILE_PATH)
+    cleaned_df = clean_and_preprocess(raw_df, cdm_column_map, required_columns)
     
     # Return the cleaned data and row count
     return cleaned_df

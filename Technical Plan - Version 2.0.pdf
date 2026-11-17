@@ -1,0 +1,1115 @@
+           SafeVoice: Technical Plan
+
+Window-wise analysis, issue inventory and proposed improvements
+
+                                Post-feedback revision
+
+               Boles Boktor        Nithin Raju   Juan Simonetti
+
+                          Peter van der Steeg
+
+               Data Science in Practice, Leiden University
+
+                       4 November 2026
+
+               Version 1.1 – Post-feedback revision
+
+Contents
+
+Feedback Summary and Revision Record                             2
+
+1 Introduction and project scope                                 3
+
+2 Existing SafeVoice architecture                                4
+
+2.1 Application and data workflow . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+
+2.2 CDM hierarchy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+
+2.3 How the current RDF mapping works . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+
+3 Issue inventory and analysis across the four HDS windows       5
+
+3.1 Window 1: ETL safety and pipeline integrity . . . . . . . . . . . . . . . . . . . . . . 5
+
+3.2 Window 2: Interoperability and semantic trustworthiness . . . . . . . . . . . . . . . 8
+
+3.3 Window 3: Access control . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+
+3.4 Window 4: Encryption and data protection . . . . . . . . . . . . . . . . . . . . . . . 13
+
+4 Methodology based on the Data Transformation Process           15
+
+5 Proposed improvements and target architecture                  16
+
+5.1 Topic-based, narrative-first reporting . . . . . . . . . . . . . . . . . . . . . . . . . . . 16
+
+5.2 Proposed topic-record-document model . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+
+5.3 Document storage proposal . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+
+5.4 Access-control proposal . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+
+5.5 FDP and HDS integration boundary . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+
+6 Implementation focus and five-week timeline                    18
+
+7 Conclusion                                                     19
+
+A Repository evidence and traceability                           19
+
+A.1 Files and line references . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19
+
+A.2 Reproducing selected findings . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20
+
+B Limitations                                                    20
+
+                                        1
+Data Science in Practice                                          SafeVoice Technical Plan
+
+Feedback Summary and Revision Record
+
+Document status: Post-feedback revision
+Current version: 1.1
+Revision date: 4 November 2026
+Previous version: 1.0 (Pre-feedback submission)
+
+    The original Technical Plan was reviewed and feedback was provided on the depth of the
+technical analysis, the coverage of the four HDS windows, the use of the Data Transformation
+Process methodology, and the clarity of the proposed architecture and implementation plan. This
+revised version addresses that feedback. The table below summarises the main points and indicates
+where the corresponding changes have been incorporated.
+
+Feedback received How it was addressed                            Location in this
+                                                                  report
+
+Provide a complete        The report now presents a               Section 3, Windows
+inventory of issues       structured issue inventory covering     1–4
+across all four HDS       ETL safety, interoperability, access
+windows.                  control, and encryption and data
+                          protection. Each finding includes
+                          supporting evidence, its impact,
+                          and a proposed improvement.
+
+Analyse the identified    Each finding now explains why the       Section 3
+issues rather than only   issue matters, its implications for
+listing them.             data quality, interoperability,
+                          security or privacy, and the
+                          proposed technical response.
+
+Apply the methodology     The seven transformation functions      Section 4
+described in the Data     are used to assess the current
+Transformation Process    SafeVoice workflow and identify
+literature.               gaps in capture, validation,
+                          de-identification, mapping,
+                          provenance, persistence, and
+                          registration.
+
+Explain the existing      The report documents the current        Section 2
+architecture and data     application workflow, including the
+workflows more clearly.   Streamlit form, JSON storage,
+                          DataFrame flattening, cleaning,
+                          RDF generation and AllegroGraph
+                          ingestion. Architecture diagrams
+                          are included to clarify the data flow.
+
+Explain the CDM           The CDM structure and the               Sections 2.2–2.3
+hierarchy and how RDF     mapping from form fields to
+is composed.              flattened columns and RDF
+                          resources and predicates are
+                          described, including examples of
+                          mapping mismatches and missing
+                          values.
+
+                          2
+Data Science in Practice                                         SafeVoice Technical Plan
+
+Feedback received How it was addressed                           Location in this
+                                                                 report
+
+Clarify the relationship  The proposed architecture              Section 5.5
+between SafeVoice,        distinguishes the current application
+AllegroGraph, the FDP     and triplestore from future FDP
+and the wider HDS.        registration and wider HDS
+                          integration.
+
+Address deployability     The implementation proposal            Sections 5–6 and
+and distinguish           separates locally achievable           Limitations
+implemented               prototype features from
+functionality from        dependencies such as organisational
+future requirements.      SSO, protected document storage
+                          and production infrastructure
+                          controls.
+
+Improve evidence          Repository findings are linked to      Section 3 and
+traceability and          the inspected source files and         Appendix A
+technical justification.  selected findings include
+                          reproducibility checks. Technical
+                          recommendations are connected to
+                          the identified issues.
+
+Connect the analysis to   The proposed topic-based,              Section 5
+expert feedback and       narrative-first reporting model,
+project discussions.      timestamped records, corrections
+                          and document metadata reflect the
+                          requirements discussed during the
+                          expert meeting.
+
+Revision note: This document is the post-feedback version of the Technical Plan. Changes
+introduced in response to the feedback are highlighted in blue throughout the report. The original
+pre-feedback submission is Version 1.0.
+
+1 Introduction and project scope
+
+SafeVoice is a Streamlit application designed to collect information about human trafficking-related
+incidents. Its current processing workflow captures a report through a web form, stores a raw JSON
+representation, flattens the payload into a Pandas DataFrame, applies cleaning and coordinate
+rounding, generates RDF N-Triples, and uploads the triples to AllegroGraph [1, 2, 3, 4, 5, 6].
+
+    The objective of this technical plan is to assess whether the current application supports reliable
+data transformation, semantic interoperability and responsible handling of sensitive information in
+the context of the HDS. The report is organised around the four course windows. It first documents
+the existing architecture and data model, then inventories and analyses the issues, and finally
+proposes improvements linked to the evidence.
+
+    The project distinguishes between:
+• Verified code findings: behaviour directly visible in the inspected repository.
+
+• Requirements and design gaps: capabilities requested by experts or needed for the intended
+    HDS role but not demonstrated in the inspected code.
+
+• External dependencies: capabilities that depend on infrastructure or decisions outside the
+
+                          3
+Data Science in Practice                                                    SafeVoice Technical Plan
+
+    current project, such as IPA organisational SSO, protected document storage and a live FDP
+    endpoint.
+    The implementation proposal is intentionally realistic. The prototype is expected to run locally
+and continue using AllegroGraph. Local authentication and application-level access checks can be
+developed as prototype functionality. Organisational identity management, production document
+storage and full FDP registration are treated as future integration requirements unless the relevant
+infrastructure becomes available.
+
+2 Existing SafeVoice architecture
+
+2.1 Application and data workflow
+
+The repository separates the application interface, orchestration, cleaning, RDF mapping and
+AllegroGraph ingestion. The Streamlit interface builds a nested JSON payload. The payload is
+flattened with pandas.json_normalize and passed to the orchestrator. The orchestrator calls
+the cleaning module, generates an N-Triples file through the mapper, and passes the result to the
+ingestion module. After successful ingestion, the original JSON and generated N-Triples file are
+moved to processed directories [2, 4, 3, 5, 6].
+
+                                     Streamlit form
+                                          app.py
+
+Raw nested JSON
+  local filesystem
+
+                          Pandas flattening
+                          json_normalize
+
+Cleaning and co-
+ordinate rounding
+
+    cleaner.py
+
+                           YAML-driven                     Processed JSON
+                           RDF mapping                       and N-Triples
+                                                                 archive
+                             mapper.py
+                                             on success
+                          RDF N-Triples
+                          intermediate file
+
+                           AllegroGraph
+                              ingestion
+                             ingest.py
+
+                                      AllegroGraph
+                                        repository
+
+Figure 1: Existing SafeVoice processing workflow reconstructed from the inspected repository. After
+a successful ingestion, the original JSON and the N-Triples file are moved to the archive. The
+diagram does not imply an existing FDP registration step.
+
+                                             4
+Data Science in Practice     SafeVoice Technical Plan
+
+2.2 CDM hierarchy
+
+The current CDM CSV organises fields into six levels: Record, Incident, Victim, Trafficker, Publica-
+tion and Updates [8]. These levels provide a logical grouping of information rather than a complete
+relational database specification. The hierarchy should be interpreted together with the actual field
+names, requiredness and the RDF relationships defined in the mapping.
+
+• Record: source and record identifiers, reporting language and dates.
+
+• Incident: incident identifier, departure and destination information, and incident description.
+
+• Victim: victim identifier, number of victims, nationality, age, gender, situation and current
+    location.
+
+• Trafficker: identifier and available descriptive information.
+
+• Publication: publication name, link and date.
+
+• Updates: update identifier, update type, field path and criticality indicator.
+
+    The presence of an Updates level in the CDM does not by itself establish that append-only
+correction handling is implemented. The inspected form and pipeline need an explicit record-
+versioning and relationship model to support that behaviour.
+
+2.3 How the current RDF mapping works
+
+The YAML mapping defines prefixes such as ex, cdm, schema, prov and xsd. It defines resources
+for a case, victim, trafficker, current victim location, departure location, destination location and
+publication. For each DataFrame row, the mapper substitutes field placeholders into subject and
+object templates, expands prefixes and writes RDF triples in N-Triples format [5, 7].
+
+    For example, the case resource is linked to victim and trafficker resources using cdm:hasVictim
+and cdm:hasTrafficker. The mapping also links the case to departure and destination resources.
+This is the intended semantic structure. However, the mapper handles missing values unevenly.
+When the placeholder of a literal value does not match a DataFrame column, the corresponding
+triple is silently skipped. When a placeholder inside an IRI template is empty, the triple is not
+skipped and the mapper produces a truncated IRI such as ex:victim_. In both cases, a syntactically
+valid N-Triples file does not guarantee that all intended CDM fields have been represented correctly.
+
+3 Issue inventory and analysis across the four HDS windows
+
+The inventory below focuses on issues that can be supported by the inspected code or are clearly
+identified as missing capabilities in the inspected processing path. A missing stage is not presented
+as proof that no external or infrastructure-level control exists. Findings W1-01, W1-03, W1-05,
+W1-06 and W3-04 can be reproduced by running the repository code, as described in section A.2.
+
+    The findings are prioritised using the MoSCoW method:
+• Must: Essential for a reliable and safe prototype.
+
+• Should: Important improvements that should be implemented if time permits.
+
+• Could: Useful improvements that can be included if resources allow.
+
+• Won’t: Outside the current implementation scope and reserved for future work.
+
+3.1 Window 1: ETL safety and pipeline integrity
+
+Window 1 concerns the reliability of capture, validation, cleaning and transformation. The following
+findings are directly supported by the current code.
+
+                          5
+Data Science in Practice                                 SafeVoice Technical Plan
+
+                 Table 2: Window 1 issue inventory and proposed fixes
+
+ID     Verified issue and      Why it matters            Proposed fix            Priority
+
+       evidence
+
+W1-01  Datatype                The dictionary lookup     Standardise datatype    Must
+                               returns None for the      labels or normalise
+       vocabulary              current CDM labels.       them before lookup.
+       mismatch. The           All 32 CDM fields end     Add a test that checks
+       CDM uses lowercase      up without a              every CDM datatype
+       labels such as string,  conversion type, so       has a supported
+       date, float,            the intended              conversion.
+       integer, boolean        type-conversion lists
+       and url. The            are never populated
+       cleaner’s               from this schema
+                               map.
+       TYPE_TRANSLATION
+       dictionary uses
+       title-case labels such
+       as String, Date,
+       Decimal, Integer
+       and URL. [3, 8]
+
+W1-02  Requiredness            The implementation        Generate                Must
+       mismatch. The           can reject a record       required-field
+       CDM marks               with no trafficker ID     validation from the
+       incident_id as          even though the CDM       CDM or a single
+       required and            marks it optional,        versioned schema
+       trafficker_id as        while failing to enforce  contract.
+       optional. The cleaner   the CDM’s incident
+       hard-codes record,      ID requirement.
+       victim and trafficker
+       IDs as required, while
+       it does not include
+       incident ID in that
+       list. [3, 8]
+
+                               6
+Data Science in Practice                                   SafeVoice Technical Plan
+
+ID     Verified issue and        Why it matters            Proposed fix           Priority
+
+       evidence
+
+W1-03  Field-name                The mapper looks up       Create one field       Must
+                                 placeholders in the       crosswalk from JSON
+       mismatches across         flattened DataFrame.      path to flattened
+                                 A missing literal field   column, CDM field,
+       form, CDM and             becomes an empty          RDF predicate and
+                                 value and the             datatype. Validate it
+       RDF mapping.              corresponding triple is   automatically.
+       Exactly one YAML          skipped. The CDM
+       placeholder has no        cannot act as the
+       matching form             single source of truth
+       column: the form          for validation while its
+       produces                  names differ from the
+                                 form.
+       data_victim_number
+       _of_victims, while
+       the YAML expects
+       data_victim_count,
+       so the number of
+       victims never reaches
+       the RDF. The CDM
+       also uses names that
+       differ from the form,
+       for example
+
+       trafficker_nat
+       against nationality,
+       pub_name against
+       name and
+       current_lat against
+
+       current_location_l
+       atitude. Some fields
+       exist on one side only,
+       such as
+       report_language in
+       the CDM and village,
+       town and description
+       fields in the form.
+       [2, 8, 7, 3]
+
+W1-04  Identifier and            IDs may collide if        Generate unique IDs    Should
+                                 submissions occur         server-side, use
+       filename generation       within the same           collision-resistant
+       are weak. The             second or if users        filenames and enforce
+       default record ID is      enter duplicate           uniqueness before
+       based on minute and       identifiers. A filename   writing.
+       second, and the raw       collision can overwrite
+       JSON filename is          a file in the same
+       based on a timestamp      source folder.
+       with second-level
+       precision. The record
+       ID is also editable. [2]
+
+                                 7
+Data Science in Practice                                  SafeVoice Technical Plan
+
+ID     Verified issue and        Why it matters           Proposed fix              Priority
+
+       evidence
+
+W1-05  Collected data is         The graph cannot         Add a coverage test:      Must
+W1-06                            show which source        every collected field is
+       lost before storage       submitted a record.      either mapped to
+                                 The incident ID,         RDF or explicitly
+       or transformation.        which the CDM            documented as
+       The form collects         marks as required, is    excluded. Add the
+       date_recorded, but        not represented either.  Source or user
+       the JSON payload          Users may assume         identity to the graph.
+       does not contain it, so   that everything they
+       it is never stored. The   enter is preserved.
+       Source ID, incident
+       ID, date received and
+       the departure and
+       destination village are
+       stored in the JSON,
+       but no YAML
+       mapping uses them,
+       so they never reach
+       the RDF graph. [2, 7]
+
+       Silent defaults in        A report submitted       Add an explicit empty     Must
+       the form. Latitude        with untouched fields    option to drop-downs,
+       and longitude inputs      stores plausible but     treat unset
+       have no explicit          false values, including  coordinates as
+       starting value, and       coordinates 0,0 (a       missing, and require
+       the drop-downs have       point in the Gulf of     the user to confirm
+       no empty option.          Guinea). Such values     optional fields they
+       Streamlit therefore       cannot be told apart     leave empty.
+       pre-fills 0.0 and the     from real input.
+       first listed option, for
+       example Ethiopia,
+       Female, In captivity
+       and Sudan with the
+       current drop-down file.
+       Age defaults to 0. [2]
+
+3.2 Window 2: Interoperability and semantic trustworthiness
+
+Window 2 concerns whether the generated RDF has consistent meaning and can be interpreted and
+reused by other systems. The current mapper does generate N-Triples, but RDF serialisation alone
+does not establish semantic interoperability.
+
+                                 8
+Data Science in Practice                               SafeVoice Technical Plan
+
+       Table 3: Window 2 issue inventory and proposed fixes
+
+ID     Verified issue or gap Why it matters            Proposed fix             Priority
+
+W2-01  CDM-to-RDF field        The graph may be        Complete the field       Must
+                               valid N-Triples while   crosswalk and add
+       mapping is              omitting intended       mapping tests that
+       incomplete. One         properties. This        assert the expected
+       YAML placeholder        reduces semantic        triples for
+       (data_victim_count)     completeness and        representative records.
+       has no matching         makes downstream
+       column in the           interpretation
+       flattened form, and     unreliable.
+       five further collected
+       fields are never
+       mapped (see W1-03
+       and W1-05). The
+       mapper silently skips
+       triples when a literal
+       placeholder produces
+       an empty value.
+       [2, 3, 5, 7, 8]
+
+W2-02  No explicit RDF         Invalid or incomplete   Add SHACL shapes         Should
+       shape-validation        graphs can reach        for required
+       stage is present in     persistence without a   properties, datatypes
+       the inspected           formal graph-level      and relationships, and
+       pipeline. The           conformance check.      validate the graph
+       orchestrator calls      This is a gap in the    before ingestion.
+       cleaning, RDF           inspected path, not
+       generation and          proof that no external
+       ingestion, but does     validation exists.
+       not call SHACL
+       validation. [4, 5]
+
+                               9
+Data Science in Practice                               SafeVoice Technical Plan
+
+ID     Verified issue or gap Why it matters            Proposed fix              Priority
+
+W2-03  Transformation          Records from any        Derive the responsible    Should
+                               source are attributed   agent from the
+W2-04  provenance is           to the same agent,      authenticated user or
+W2-05                          and it is difficult to  source. Record a
+       incomplete and the      reproduce or audit      provenance activity
+                               how a particular RDF    with input record,
+       source association      output was produced.    output graph,
+       is a constant. The                              timestamp, agent and
+       YAML asserts prov:                              versions of the
+                                                       transformation code,
+       wasAssociatedWith                               CDM and mapping.
+       with the fixed value
+       ex:EEPA for every
+       record. It is not
+       derived from the
+       submitting Source ID,
+       and the Source ID
+       never appears in the
+       generated RDF. The
+       inspected pipeline
+       also does not record a
+       transformation
+       activity with input,
+       output, software
+       version and
+       mapping/CDM
+       versions. [7, 4, 5]
+
+       FDP registration is     Storage in a            Define the dataset        Won’t
+                               triplestore does not    metadata and FDP
+       not demonstrated.       automatically make a    registration interface
+       The inspected           dataset discoverable    once an FDP endpoint
+       workflow uploads        through an FDP or       and its requirements
+       RDF to AllegroGraph     connected to the        are available.
+       but contains no FDP     HDS.
+       metadata registration
+       or publication
+       operation. [4, 6, 1]
+
+       Topic, narrative,       The current data        Extend the conceptual     Must
+       document and            model does not fully    model after expert
+       correction concepts     support the intended    review. Represent
+       are not represented     expert workflow or      topics, timestamped
+       as a complete           the relationship        records, corrections
+       model in the            between submissions     and document
+       current                 and supporting          metadata with stable
+       form-to-RDF path.       evidence.               identifiers and explicit
+       The current form is                             relationships.
+       field-oriented and the
+       mapping does not
+       define the
+       expert-requested
+       topic-to-record-to-
+       document structure.
+       [2, 7, 10]
+
+                               10
+Data Science in Practice                                  SafeVoice Technical Plan
+
+3.3 Window 3: Access control
+
+Window 3 concerns whether only authorised people can access records and whether data is separated
+according to the relevant source or user permissions.
+
+                             Table 4: Window 3 issue inventory and proposed fixes
+
+ID     Verified issue and        Why it matters           Proposed fix            Priority
+W3-01  evidence
+
+W3-02  Source ID is              A typed identifier       Implement local         Must
+                                 does not establish       authentication for the
+       user-entered, not         who the user is.         prototype and derive
+                                                          the user identity from
+       an authenticated                                   the authenticated
+       identity. The                                      session.
+       Streamlit sidebar
+       accepts Source ID
+       through a text input
+       with a default value.
+       [2]
+
+       Report visibility is      Anyone who enters        Enforce server-side     Must
+                                 another source’s         ownership checks.
+       selected using the        identifier selects that  Never use a
+                                 source’s report folder.  user-editable field as
+       typed Source ID.          The current code does    the access-control
+       The Manage Reports        not demonstrate          identity.
+       page constructs a         identity-based
+       local folder path from    authorisation, and the
+       the Source ID entered     page shows the
+       in the sidebar and        archived records,
+       displays every JSON       including their
+       file in that folder. [2]  original coordinate
+                                 precision (see W4-02).
+
+                                 11
+Data Science in Practice                               SafeVoice Technical Plan
+
+ID     Verified issue and      Why it matters          Proposed fix            Priority
+
+       evidence
+
+W3-03  Source-specific         The local JSON folder   Decide whether          Should
+W3-04                          separation is not       isolation is
+       AllegroGraph            matched by              implemented through
+                               repository-level        repositories, named
+       isolation is not        isolation, and the      graphs or
+                               documentation           application-level
+       implemented in the      overstates what the     authorisation, then
+                               code does. The          enforce and test that
+       inspected ingestion     application account is  boundary. Use a
+       function. The           allowed to create       least-privilege
+       pipeline passes         repositories.           AllegroGraph account
+       source_id, but                                  and correct the
+       ingestion connects                              README.
+       using the single
+       AG_REPO environment
+       variable and does not
+       use the Source ID to
+       select a repository or
+       graph context. The
+       README, however,
+       describes upload to a
+       source-specific
+       repository (for
+       example 001_repo).
+       The connection is also
+       opened with
+       create=True.
+       [4, 6, 9]
+
+       The Source ID is        An ID such as A-1 is    Never build paths       Must
+                               archived under one      from typed text. Use
+       handled                 folder name but read    server-generated
+                               from another, so the    identifiers, validate
+       inconsistently          source cannot see its   against a strict
+                               own reports. An ID      pattern, and check
+       when file paths are     containing ../ makes    that the resolved path
+       built. The form and     the pipeline write the  stays inside the
+       the Manage Reports      N-Triples file outside  intended base
+       page strip every        data/intermediate,      directory.
+       non-alphanumeric        and the archive move
+       character from the      can leave the intended
+       Source ID. The          folder. A single text
+       archiving step in the   field therefore
+       pipeline strips only a  influences where files
+       leading #, and the      are written.
+       N-Triples filename
+       uses the typed value
+       unchanged. [2, 4, 5]
+
+                               12
+Data Science in Practice                              SafeVoice Technical Plan
+
+ID     Verified issue and       Why it matters        Proposed fix           Priority
+
+       evidence
+
+W3-05  Accountability           The stored IP cannot  Log the authenticated  Should
+                                distinguish between   user ID and a trusted
+       metadata and the         users, and direct     request source. Add
+                                modification of the   append-only audit
+       immutability claim       stored JSON files     logging and integrity
+                                would not be          checks (for example
+       are not technically      detected.             hashes) for stored
+       enforced. The                                  records.
+       logged device_ip is
+       obtained with
+
+       socket.gethostbyna
+
+       me(socket.gethost
+       name()), which
+       returns the address of
+       the server host and
+       not of the submitting
+       client. The interface
+       states that records are
+       immutable, but the
+       inspected code only
+       omits an edit control.
+       It contains no
+       integrity check or
+       audit log. [2]
+
+    For the prototype, local username/password authentication and server-side ownership checks are
+realistic. Organisational authentication and IPA single sign-on are future integration requirements
+and are not part of the current five-week implementation commitment.
+
+3.4 Window 4: Encryption and data protection
+
+Window 4 concerns protection of sensitive information during storage, processing and transfer. The
+code demonstrates HTTPS for the AllegroGraph connection, so the analysis should not claim that
+the entire application has no encryption. The verified concern is the handling of local raw files and
+the absence of application-level file encryption in the inspected code.
+
+                                13
+Data Science in Practice                                SafeVoice Technical Plan
+
+                 Table 5: Window 4 issue inventory and proposed fixes
+
+ID     Verified issue and       Why it matters          Proposed fix              Priority
+
+       evidence
+
+W4-01  Raw JSON                 Sensitive data is       Use synthetic data in     Must
+                                present in local files  development. For
+       containing sensitive     outside the RDF         deployment, use
+                                transformation step.    protected storage,
+       information is           The repository code     least-privilege
+                                does not demonstrate    filesystem permissions,
+       written to local         application-level       encryption at rest and
+       storage. The payload     encryption for these    an agreed retention
+       includes source          files.                  policy.
+       identifier, device IP,
+       incident details and
+       location coordinates
+       entered to six decimal
+       places. It is written
+       using ordinary JSON
+       file operations. [2]
+
+W4-02  Coordinate               The archived JSON       Define separate           Must
+                                retains the original    retention and access
+       rounding is applied      six-decimal precision   rules for raw and
+                                and is served back to   transformed data.
+       to the DataFrame,        whoever supplies the    Apply approved
+                                Source ID (see          generalisation or
+       not to the original      W3-02). The cleaned     de-identification to
+       JSON archive. The        RDF output and the      retained and
+       cleaner rounds           retained archive        displayed copies, and
+       selected coordinates     therefore have          assess re-identification
+       to three decimal         different privacy       risk, including
+       places. The              properties. Three       free-text fields.
+       orchestrator             decimals still
+       subsequently moves       correspond to roughly
+       the original raw         110 m, so even the
+       JSON file to the         rounded values are
+       processed directory,     coarse rather than
+       and the Manage           anonymous.
+       Reports page reads
+       and displays that
+       archive. Free-text and
+       place-name fields
+       (village, town,
+       descriptions) are
+       passed on unchanged.
+       [3, 4, 2]
+
+W4-03  Document                 Supporting evidence     For the prototype,        Could
+       attachment storage       cannot yet be           demonstrate the
+       is not implemented       managed as protected,   metadata model and,
+       in the current form.     individually            if feasible, local
+       The form captures        permissioned            handling of dummy
+       publication name,        documents linked to a   files only. Production
+       URL and date, but        record.                 binaries should be
+       has no multi-file                                stored in an
+       attachment upload or                             IPA-approved
+       protected document                               protected service,
+       retrieval workflow. [2]                          outside AllegroGraph.
+
+                                14
+Data Science in Practice                                    SafeVoice Technical Plan
+
+ID     Verified issue and      Why it matters               Proposed fix            Priority
+
+       evidence
+
+W4-04  At-rest encryption      The project cannot           Confirm the host’s      Won’t
+       and backup              claim that stored            disk encryption,
+       protection are not      sensitive records are        backup encryption,
+       demonstrated by         encrypted at rest            key management,
+                               without infrastructure       retention and deletion
+       the repository code.    evidence.                    controls with the
+       The application writes                               infrastructure owner.
+       local JSON files
+       directly. The
+       deployment’s
+       operating-system, disk
+       and backup controls
+       are outside the
+       inspected repository.
+       [2]
+
+    The ingestion module explicitly configures HTTPS on port 443 for the AllegroGraph connection
+[6]. This is a positive control for that connection. It does not establish encryption at rest for local
+JSON files or confirm the security of other deployment paths.
+
+4 Methodology based on the Data Transformation Process
+
+Gebremeskel et al. describe a Data Transformation Process for the HDS using seven functions:
+capture, validation, de-identification, mapping, provenance, persistence and identification, and
+registration and exposure [12]. These functions provide a useful way to organise the SafeVoice
+assessment.
+
+                    Table 6: Applying the seven transformation functions to SafeVoice
+
+    Function              SafeVoice observation             Improvement direction
+    Capture
+                          Streamlit captures structured     Align capture with
+    Validation            report fields and creates         topic-based, narrative-first
+                          nested JSON. Untouched            reporting while retaining
+                          fields are submitted with         optional structured fields.
+                          default values, and some          Make missing values explicit.
+                          collected fields are not stored.
+                                                            Use schema-driven input
+                          Cleaner performs limited ID       validation and RDF shape
+                          filtering. The intended type      validation.
+                          conversion is never populated
+                          from the CDM, and no
+                          SHACL stage is called in the
+                          inspected pipeline.
+
+                               15
+Data Science in Practice                                 SafeVoice Technical Plan
+
+Function                  SafeVoice observation          Improvement direction
+De-identification
+                          Selected coordinates are       Assess privacy risk and apply
+Mapping                   rounded to three decimals in   consistent, documented
+                          the cleaned DataFrame. The     handling to raw, derived and
+Provenance                original JSON remains          displayed data.
+                          unchanged and is what
+Persistence and           Manage Reports displays.       Maintain a versioned
+identification            Free-text and place-name       crosswalk and automated
+Registration and          fields are not de-identified.  mapping tests.
+exposure
+                          YAML mapping transforms        Record the responsible agent,
+                          flattened fields into RDF      transformation activity,
+                          triples, but field-name        inputs, outputs and version
+                          mismatches omit values and     information.
+                          several collected fields are
+                          never mapped.                  Use stable identifiers and
+                                                         define controlled retention
+                          A constant association with    and access policies.
+                          EEPA is asserted for every
+                          record. The submitting         Prepare dataset metadata
+                          Source ID is not recorded in   and register through an FDP
+                          the RDF, and transformation    when an endpoint is available.
+                          provenance is incomplete.
+
+                          RDF is stored in
+                          AllegroGraph; local JSON
+                          and N-Triples files are
+                          archived.
+
+                          No FDP registration
+                          operation is shown in the
+                          inspected workflow.
+
+    The five design decisions described in the same work are also relevant: input structuring,
+controlled vocabularies, domain ontology alignment, data-space ontology structuring and RDF
+specification/serialisation [12]. In SafeVoice, these decisions translate into a consistent form/CDM
+contract, stable vocabulary identifiers, agreed predicates and relationships, an explicit topic-record-
+document model, and validated RDF output.
+
+    The VODAN-Africa case demonstrates the use of semantic technologies, controlled vocabularies
+and RDF to support data interoperability in a federated setting [13]. It provides a relevant precedent
+for the direction of SafeVoice, but it does not mean that SafeVoice is already registered or operational
+within an FDP.
+
+5 Proposed improvements and target architecture
+
+The proposed improvements directly address the issues identified in the four windows. The priority
+is to establish a reliable data contract, improve the reporting workflow and enforce access control
+before expanding the system’s production capabilities.
+
+5.1 Topic-based, narrative-first reporting
+
+The expert discussion with Mirjam van Reisen identified a need to organise work around topics
+rather than treating every report as an isolated form submission. A topic should group related
+records. A user should be able to create a topic or select an existing one, enter a narrative first, and
+then provide optional structured information where available [10].
+
+                          16
+Data Science in Practice      SafeVoice Technical Plan
+
+    Each submitted record should receive a unique identifier and a server-generated timestamp.
+Corrections should be stored as new records linked to the earlier record, preserving the submission
+history rather than overwriting it. The final fields and exact correction relationships should be
+confirmed with Mirjam and Daniel before implementation.
+
+5.2 Proposed topic-record-document model
+
+The proposed conceptual model is:
+• Topic: a container for a subject or case area, with a stable topic identifier.
+
+• Record: an immutable, timestamped submission linked to one topic.
+
+• Correction: a new record linked to the record it corrects or supersedes.
+
+• Document: a separately identified attachment linked to a record, with metadata such as title,
+    file type, upload time and storage reference.
+
+• User: an authenticated identity with permissions for the relevant topics, records and documents.
+
+5.3 Document storage proposal
+
+The current repository does not demonstrate an IPA document-storage service, so the plan does
+not assume that one already exists. For the local prototype, the team may demonstrate document
+metadata and, if time permits, attachment handling with dummy files. Real sensitive documents
+should not be used in local demonstrations. For production, binary documents should be stored
+in an approved protected server-side storage service. AllegroGraph should contain the document
+identifier, metadata and authorised reference, not the binary content itself.
+
+5.4 Access-control proposal
+
+The prototype should replace the manually entered Source ID as the basis for access decisions with
+local authentication. The application should derive the current user from the authenticated session
+and enforce ownership checks whenever topics, records or documents are listed, opened or changed.
+File and folder names should be generated on the server from the authenticated user and record
+identifiers, never from typed text (W3-04). The authenticated identity should also be written to
+the RDF graph as the responsible agent (W2-03). IPA organisational SSO is outside the current
+implementation scope. The prototype should be designed so that its authentication layer can later
+be replaced or integrated with an organisational identity provider.
+
+5.5 FDP and HDS integration boundary
+
+SafeVoice is the data-producing application. AllegroGraph is the current RDF persistence layer. An
+FDP, where available, provides a metadata and discovery interface for datasets. The HDS is the
+wider federated environment in which participating data sources and services can exchange and
+discover data under agreed governance and interoperability conditions.
+
+    The inspected repository demonstrates local data capture, RDF generation and AllegroGraph
+ingestion. It does not demonstrate FDP registration. Therefore, the realistic project objective is
+to improve the quality and consistency of the RDF and prepare dataset metadata for future FDP
+integration. Actual registration requires an FDP endpoint, its metadata profile and the relevant
+access arrangements.
+
+                          17
+Data Science in Practice                                     SafeVoice Technical Plan
+
+   SafeVoice    RDF out AllegroGraph        FAIR Data Point  Humanitarian
+ capture and               RDF persistence    metadata and    Data Space
+transformation                                   discovery
+
+Figure 2: Conceptual relationship between SafeVoice, AllegroGraph, an FDP and the wider HDS.
+Dashed arrows indicate future integration, not functionality demonstrated in the current repository.
+
+6 Implementation focus and five-week timeline
+
+The implementation focus should remain proportionate to the five-week prototype. The proposed
+priorities are:
+ 1. correct the CDM datatype, requiredness and field-name inconsistencies, and make sure every
+
+     collected field is either mapped or deliberately excluded;
+
+ 2. agree and implement the topic and record model, including narrative-first capture and times-
+     tamped submissions;
+
+ 3. implement local authentication and server-side user-level access checks, and replace typed
+     identifiers in file paths with server-generated ones;
+
+ 4. integrate and test the RDF mapping against the agreed field crosswalk;
+
+ 5. conduct functional testing and expert evaluation with Mirjam and Daniel.
+    A local attachment demonstration using dummy files can be attempted if the core work is
+
+stable. IPA SSO, production document storage, infrastructure-level encryption assurance and full
+FDP registration remain future work because the required services and endpoints have not been
+confirmed.
+
+Figure 3: Proposed five-week SafeVoice implementation timeline. Task ownership and durations are
+indicative and should be confirmed by the team.
+
+                                                               18
+Data Science in Practice                SafeVoice Technical Plan
+
+7 Conclusion
+
+The repository provides a modular starting point for SafeVoice, but the code review identifies
+concrete inconsistencies between the CDM, form, cleaner and RDF mapping. The datatype lookup
+does not match the current CDM labels, required-field rules are hard-coded inconsistently, and some
+RDF placeholders do not match the flattened input columns. Several collected fields, including the
+Source ID, never reach the RDF graph, and untouched form fields are submitted with default values.
+The current Source ID mechanism is not authentication, the ingestion function does not use Source
+ID to select an isolated AllegroGraph repository or graph context, and a Source ID containing path
+characters can place generated files outside the intended directories. The application also retains
+raw JSON locally, including original location precision, and the Manage Reports page displays that
+archive, even though the cleaned DataFrame rounds selected coordinates.
+
+    The proposed work addresses these findings across all four HDS windows. The immediate
+priorities are a consistent schema contract, tested RDF mapping, a topic-based narrative-first
+workflow and identity-based access control. Document storage, organisational SSO and FDP
+registration are important parts of the longer-term target architecture, but depend on infrastructure
+and decisions that are not currently confirmed. This distinction keeps the technical plan evidence-
+based and realistic.
+
+A Repository evidence and traceability
+
+A.1 Files and line references
+
+The following files were inspected on the public main branch on 4 November 2026, at commit
+b69e79c (22 June 2026). Line numbers refer to that version and should be rechecked against the
+team’s exact working commit before submission.
+
+File                          Evidence used in this report
+app.py
+                              Source ID input (L47); device_ip (L50); default
+src/cleaning/cleaner.py       record ID (L67); date_recorded input (L71) and
+src/orchestrator/pipeline.py  its absence from the payload (L189–219);
+                              coordinate inputs with six decimals (L104–107,
+src/transform/mapper.py       L127, L131, L146, L150); raw JSON writing
+src/storage/ingest.py         (L222–224); Manage Reports folder selection
+config/CDM - Human            (L281–282); immutability caption (L339).
+Trafficking Sources EEPA.csv
+                              Datatype translation dictionary (L10–17);
+                              hard-coded required IDs (L123); coordinate
+                              rounding (L169–182).
+
+                              Source ID hand-off (L31); N-Triples filename
+                              (L44); ingestion call (L55); archiving, including the
+                              lstrip of the Source ID and the move of the
+                              original JSON file (L58–81).
+
+                              Missing-value handling for subjects and literals
+                              (L107–113, L138–139); N-Triples output path
+                              (L182).
+
+                              Unused source_id parameter (L18); single
+                              AG_REPO (L14); HTTPS and create=True in the
+                              connection (L31–39).
+
+                              CDM hierarchy, datatype labels and requiredness.
+
+                              19
+Data Science in Practice      SafeVoice Technical Plan
+
+File                      Evidence used in this report
+config/yml_mapping.yml
+                          RDF prefixes, resource templates, predicates and
+README.md                 field placeholders; constant ex:EEPA association
+                          (L31); data_victim_count placeholder (L45).
+                          Description of upload to a source-specific
+                          repository (L44).
+
+A.2 Reproducing selected findings
+
+The following checks can be run from the repository root with the repository’s own code. Each
+check needs only Python, pandas and PyYAML. The AllegroGraph connection is not needed.
+
+• W1-01: call create_cdm_column_map from cleaner.py on the CDM file. All returned datatype
+    values are None.
+
+• W1-03 and W1-05: flatten a payload shaped like the one in app.py with pandas.json_norm
+    alize (separator _) and compare the column names with the $(...) placeholders in the YAML
+    mapping. Only data_victim_count has no matching column, and five collected columns are
+    never used.
+
+• W1-06: open the form without touching any field, or run app.py with Streamlit’s AppTest,
+    and read the widget values. Coordinates are 0.0 and the drop-downs show their first option.
+
+• W3-04: call save_triples_to_file from mapper.py with the filename ../../test_batch.nt.
+    The file is written to the repository root instead of data/intermediate.
+
+B Limitations
+
+This report analyses the public repository branch inspected on 4 November 2026. The team’s local
+working copy may contain changes that are not present in that branch. The report does not claim
+that infrastructure-level controls are absent merely because they are not implemented in application
+code. In particular, disk encryption, backup protection, server permissions, organisational SSO and
+IPA document storage require confirmation from the relevant infrastructure owners. The default
+values described in W1-06 depend on the Streamlit version and on the content of the drop-down file.
+The final CDM fields and RDF predicates should be reviewed with Mirjam and Daniel. Synthetic
+or properly anonymised data should be used for development and demonstrations.
+
+References
+
+ [1] VODAN-Development. SafeVoice: Human Trafficking Source Information. GitHub repository,
+      main branch inspected 4 November 2026.
+      https://github.com/VODAN-Development/SafeVoice
+
+ [2] VODAN-Development. SafeVoice application source: app.py.
+      https://github.com/VODAN-Development/SafeVoice/blob/main/app.py
+
+ [3] VODAN-Development. SafeVoice cleaning module: cleaner.py.
+      https://github.com/VODAN-Development/SafeVoice/blob/main/src/cleaning/cleaner.
+      py
+
+ [4] VODAN-Development. SafeVoice orchestration module: pipeline.py.
+      https://github.com/VODAN-Development/SafeVoice/blob/main/src/orchestrator/pi
+      peline.py
+
+                          20
+Data Science in Practice      SafeVoice Technical Plan
+
+ [5] VODAN-Development. SafeVoice RDF mapper: mapper.py.
+      https://github.com/VODAN-Development/SafeVoice/blob/main/src/transform/mapper.
+      py
+
+ [6] VODAN-Development. SafeVoice AllegroGraph ingestion module: ingest.py.
+      https://github.com/VODAN-Development/SafeVoice/blob/main/src/storage/ingest.
+      py
+
+ [7] VODAN-Development. SafeVoice RDF mapping configuration: yml_mapping.yml.
+      https://github.com/VODAN-Development/SafeVoice/blob/main/config/yml_mapping.
+      yml
+
+ [8] VODAN-Development. Common Data Model: Human Trafficking Sources EEPA.
+      https://github.com/VODAN-Development/SafeVoice/blob/main/config/CDM%20-%20Hu
+      man%20Trafficking%20Sources%20EEPA.csv
+
+ [9] VODAN-Development. SafeVoice README.
+      https://github.com/VODAN-Development/SafeVoice/blob/main/README.md
+
+[10] SafeVoice project team. Mirjam van Reisen meeting notes and action points. Project material
+      supplied by the team, 2026.
+
+[11] SafeVoice project team. SafeVoice Technical Plan, Version 2.0. Revised 3 November 2026.
+      Project material supplied by the team.
+
+[12] Gebremeskel, T. G., Stocker, J., Kievit, R., Taye, G., and van Reisen, M. Data Transformation
+      Process in the Humanitarian Data Space. Draft dated 30 August 2026, supplied as course
+      literature.
+
+[13] Amare, S. Y., Taye, G. T., Gebremeskel, T. G., Plug, R., and van Reisen, M. (2023). Realizing
+      health data interoperability in low connectivity settings: The case of VODAN-Africa. FAIR
+     Connect, 1, 55–61.
+      https://doi.org/10.3233/FC-221510
+
+                          21
+

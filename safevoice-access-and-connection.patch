@@ -1,0 +1,848 @@
+diff --git a/app.py b/app.py
+index aea0fdb..949f5ba 100644
+--- a/app.py
++++ b/app.py
+@@ -34,8 +34,7 @@ user = st.session_state.get("user")
+ if user and auth.idle_expired(st.session_state.get("last_seen"), time.time()):
+     # Checked on every interaction: an idle session is closed before anything is shown (P2-4).
+     audit.log(user, "idle_logout")
+-    st.session_state.pop("user", None)
+-    st.session_state["notice"] = "You were logged out after a period of inactivity."
++    auth.end_session(st.session_state, "You were logged out after a period of inactivity.")
+     user = None
+ if not user:
+     views.login_page()
+@@ -50,6 +49,7 @@ views.sidebar(user, topic["id"] if topic else None)
+ 
+ # Unknown or not-owned IDs fall back to the topic overview (ownership check).
+ if (topic_id and not topic) or (record_id and (not record or record["topic_id"] != topic_id)):
++    audit.log(user, "access_denied", detail=f"topic={topic_id} record={record_id}")
+     st.warning("This topic or record doesn't exist, or you don't have access to it.")
+     if st.button("Back to topics"):
+         go()
+diff --git a/src/storage/check.py b/src/storage/check.py
+new file mode 100644
+index 0000000..811bb50
+--- /dev/null
++++ b/src/storage/check.py
+@@ -0,0 +1,110 @@
++"""Find out why records do not reach AllegroGraph. Run from the repository root:
++
++    python -m src.storage.check
++
++Four steps, each reported as OK or FAILED with the reason:
++  1. the AG_* settings in .env (the password is never printed)
++  2. a dry run of the pipeline on a synthetic record: payload -> cleaning -> RDF (no upload)
++  3. a connection to the AllegroGraph repository
++  4. a real upload of one synthetic triple through the same code the app uses, then its removal
++
++Steps 1-2 failing means the problem is in the app or the configuration files, not in AllegroGraph.
++Step 3 failing means the server, credentials or repository name. Step 4 failing means the upload itself.
++Only synthetic data is used; the test triple goes into its own graph (<graph base>/_check).
++"""
++import os
++import sys
++import tempfile
++from datetime import datetime
++
++from src.storage import ingest
++
++CHECK_SOURCE = "_check"
++TEST_TRIPLE = ('<https://safevoice.example.org/check/subject> '
++               '<https://safevoice.example.org/check/predicate> "connection test" .\n')
++
++
++def _report(ok, name, detail=""):
++    print(f"[{'OK' if ok else 'FAILED'}] {name}" + (f"\n       {detail}" if detail else ""))
++    return ok
++
++
++def check_settings():
++    s, missing = ingest._settings(), ingest.missing_settings()
++    shown = (f"host={s['host'] or '-'}  port={s['port']}  repo={s['repo'] or '-'}  user={s['user'] or '-'}  "
++             f"password={'set (' + str(len(s['password'])) + ' characters)' if s['password'] else 'MISSING'}  "
++             f"create_repo={s['create']}")
++    if missing:
++        return _report(False, "1. settings in .env", f"missing: {', '.join(missing)}\n       {shown}")
++    return _report(True, "1. settings in .env", shown)
++
++
++def check_dry_run():
++    try:
++        from src.cleaning import run_clean_pipeline
++        from src.orchestrator.payload import build_payload, payload_to_frame
++        from src.transform import mapper
++        record = {"id": "R-CHECK00001", "topic_id": "T-CHECK", "owner": CHECK_SOURCE, "title": "Connection check",
++                  "narrative": "Synthetic record made by src.storage.check", "submitted": datetime.now(),
++                  "corrects": None, "reason": "", "data": {}}
++        cleaned = run_clean_pipeline(payload_to_frame(build_payload(record)))
++        if cleaned.empty:
++            return _report(False, "2. pipeline dry run (clean + RDF, no upload)",
++                           "the cleaner rejected the synthetic record; see the [CLEANER] lines above")
++        triples = mapper.generate_triples(cleaned)
++        if not triples:
++            return _report(False, "2. pipeline dry run (clean + RDF, no upload)", "no triples were generated")
++        return _report(True, "2. pipeline dry run (clean + RDF, no upload)", f"{len(triples.splitlines())} triples generated")
++    except Exception as exc:  # noqa: BLE001
++        return _report(False, "2. pipeline dry run (clean + RDF, no upload)", f"{type(exc).__name__}: {exc}")
++
++
++def check_connection():
++    try:
++        conn = ingest.connect()
++    except Exception as exc:  # noqa: BLE001
++        return None, _report(False, "3. connection to AllegroGraph", f"{type(exc).__name__}: {exc}")
++    try:
++        size = conn.size()
++    except Exception as exc:  # noqa: BLE001
++        conn.close()
++        return None, _report(False, "3. connection to AllegroGraph", f"connected, but reading failed: {type(exc).__name__}: {exc}")
++    _report(True, "3. connection to AllegroGraph", f"repository '{ingest._settings()['repo']}' has {size} triples")
++    return conn, True
++
++
++def check_upload(conn):
++    graph = ingest.graph_for_source(CHECK_SOURCE)
++    with tempfile.TemporaryDirectory() as tmp:
++        path = os.path.join(tmp, "check.nt")
++        with open(path, "w", encoding="utf-8") as fh:
++            fh.write(TEST_TRIPLE)
++        ok = ingest.ingest_rdf_file(path, source_id=CHECK_SOURCE)
++    if not ok:
++        return _report(False, "4. upload of a test triple", ingest.last_error or "see the [INGEST] lines above")
++    try:  # best-effort clean-up of the test graph
++        ctx = conn.createURI(graph)
++        conn.remove(None, None, None, contexts=[ctx])
++        cleaned = "test triple removed again"
++    except Exception as exc:  # noqa: BLE001
++        cleaned = f"could not remove it ({type(exc).__name__}); delete graph <{graph}> by hand"
++    return _report(True, "4. upload of a test triple", f"written to graph <{graph}>; {cleaned}")
++
++
++def main():
++    results = [check_settings(), check_dry_run()]
++    conn = None
++    if results[0]:
++        conn, ok = check_connection()
++        results.append(ok)
++        if conn is not None:
++            try:
++                results.append(check_upload(conn))
++            finally:
++                conn.close()
++    print("\nAll checks passed." if all(results) and len(results) == 4 else "\nSome checks failed: fix the first FAILED step.")
++    return 0 if all(results) and len(results) == 4 else 1
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/src/storage/ingest.py b/src/storage/ingest.py
+index 36c4796..64b9290 100644
+--- a/src/storage/ingest.py
++++ b/src/storage/ingest.py
+@@ -1,6 +1,7 @@
+ # src/storage/ingest.py
+ 
+ import os
++import re
+ from typing import Optional
+ from dotenv import load_dotenv, find_dotenv
+ from franz.openrdf.connect import ag_connect
+@@ -10,47 +11,120 @@ from franz.openrdf.rio.rdfformat import RDFFormat
+ load_dotenv(find_dotenv())
+ 
+ # --- Server Configuration Constants ---
++# Kept for backwards compatibility; the connection itself re-reads .env on every call
++# (see _settings), so a corrected .env works without importing this module again.
+ AG_BASE_URL = os.getenv("AG_BASE_URL")
+ AG_REPO = os.getenv("AG_REPO")
+ AG_USER = os.getenv("AG_USER")
+ AG_PASSWORD = os.getenv("AG_PASSWORD")
+ 
++# W3-03: each source's triples go into its own named graph, and the application account does not
++# create repositories unless AG_CREATE_REPO=true is set (first-time setup only).
++GRAPH_BASE = os.getenv("SAFEVOICE_GRAPH_BASE", "https://safevoice.example.org/graph/")
++AG_CREATE_REPO = os.getenv("AG_CREATE_REPO", "false").strip().lower() in ("1", "true", "yes")
++_SAFE_SOURCE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
++REQUIRED_SETTINGS = ("AG_BASE_URL", "AG_REPO", "AG_USER", "AG_PASSWORD")
++
++# Reason for the most recent failure. For the audit log and src.storage.check only: it holds no
++# report content, and the app never shows it to users.
++last_error = ""
++
++
++def graph_for_source(source_id: str) -> str:
++    """Named-graph IRI for one source. Raises ValueError for anything but a plain ID."""
++    if not isinstance(source_id, str) or not _SAFE_SOURCE.fullmatch(source_id):
++        raise ValueError(f"Unsafe source_id for a graph IRI: {source_id!r}")
++    return GRAPH_BASE.rstrip("/") + "/" + source_id
++
++
++def _load_env():
++    load_dotenv(find_dotenv() or find_dotenv(usecwd=True))
++
++
++def missing_settings():
++    """Names of the AG_* settings that are not set in .env or the environment."""
++    _load_env()
++    return [name for name in REQUIRED_SETTINGS if not (os.getenv(name) or "").strip()]
++
++
++def _host(url):
++    """AllegroGraph wants a bare host name: drop a pasted https:// and any trailing slash."""
++    return re.sub(r"^https?://", "", (url or "").strip()).rstrip("/")
++
++
++def _settings():
++    _load_env()
++    return {
++        "host": _host(os.getenv("AG_BASE_URL")),
++        "port": int((os.getenv("AG_PORT") or "443").strip()),
++        "repo": (os.getenv("AG_REPO") or "").strip(),
++        "user": (os.getenv("AG_USER") or "").strip(),
++        "password": os.getenv("AG_PASSWORD") or "",
++        "create": os.getenv("AG_CREATE_REPO", str(AG_CREATE_REPO)).strip().lower() in ("1", "true", "yes"),
++    }
++
++
++def connect():
++    """Open a connection to the AllegroGraph repository from the .env settings. Caller closes it."""
++    s = _settings()
++    return ag_connect(
++        repo=s["repo"],
++        host=s["host"],
++        port=s["port"], # Default secure port for AllegroGraph
++        protocol='https', # Force connection to use secure HTTPS protocol
++        user=s["user"],
++        password=s["password"],
++        create=s["create"] # off by default (W3-03); set AG_CREATE_REPO=true to create a missing repository
++    )
++
++
+ def ingest_rdf_file(file_path: str, source_id: str, context_uri: Optional[str] = None) -> bool:
+     """
+     Ingests an N-Triples (.nt) file directly into the AllegroGraph repository.
+     """
++    global last_error
++    last_error = ""
++
+     # 1. Validate File Existence
+     if not os.path.exists(file_path):
++        last_error = "RDF file not found"
+         print(f"[INGEST] ERROR: File not found at {file_path}")
+         return False
+-        
+-    print(f"[INGEST] Connecting to AllegroGraph at {AG_BASE_URL}...")
++
++    missing = missing_settings()
++    if missing:
++        last_error = f"Missing in .env: {', '.join(missing)}"
++        print(f"[INGEST] ERROR: {last_error}")
++        return False
++
++    if context_uri is None:
++        try:
++            context_uri = graph_for_source(source_id)
++        except ValueError as e:
++            last_error = "Unsafe source_id"
++            print(f"[INGEST] ERROR: {e}")
++            return False
++
++    print(f"[INGEST] Connecting to AllegroGraph at {_settings()['host']}...")
+ 
+     try:
+         # 2. Connect directly to the Server and Repository
+-        conn = ag_connect(
+-            repo=AG_REPO,
+-            host=AG_BASE_URL,
+-            port=443, # Default secure port for AllegroGraph
+-            protocol='https', # Force connection to use secure HTTPS protocol
+-            user=AG_USER,
+-            password=AG_PASSWORD,
+-            create=True # Creates the repository automatically if it doesn't exist yet
+-        )
+-        
++        conn = connect()
++
+         print(f"[INGEST] Connection established. Uploading file: {file_path}")
+-        
++
+         # 3. Ingest nt file using addFile
+-        conn.addFile(file_path, base=None, format=RDFFormat.NTRIPLES, context=context_uri)
++        conn.addFile(file_path, base=None, format=RDFFormat.NTRIPLES, context=conn.createURI(context_uri))
+         total_triples = conn.size()
+-        print(f"[INGEST] SUCCESS: File loaded. Repository '{AG_REPO}' now contains {total_triples} triples.")
+-        
++        print(f"[INGEST] SUCCESS: File loaded. Repository '{_settings()['repo']}' now contains {total_triples} triples.")
++
+         return True
+ 
+     except Exception as e:
++        last_error = f"{type(e).__name__}: {e}"[:300]
+         print(f"[INGEST] FAILURE: Data loading failed. Error: {e}")
+         return False
+-        
++
+     finally:
+         # 4. Ensure connection is closed
+         if 'conn' in locals() and conn:
+diff --git a/tests/test_access_control.py b/tests/test_access_control.py
+new file mode 100644
+index 0000000..25a6be6
+--- /dev/null
++++ b/tests/test_access_control.py
+@@ -0,0 +1,293 @@
++"""Access-control hardening tests (W3-01, W3-02, W3-03, W3-05): login lockout, timing,
++session clean-up, record-chain safety, audit log size, per-source graphs in AllegroGraph.
++
++Self-contained: needs no AllegroGraph, no pipeline and no real .env.
++"""
++import json
++import sqlite3
++
++import pytest
++
++from src.storage import ingest
++from ui import audit, auth, store
++
++
++# ---------------------------------------------------------------- shared setup
++
++@pytest.fixture(autouse=True)
++def isolated(tmp_path, monkeypatch):
++    monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "app" / "t.db"))
++    monkeypatch.setattr(audit, "AUDIT_LOG", str(tmp_path / "audit" / "audit.log"))
++    monkeypatch.setattr(store, "run_pipeline", lambda df: (df, "Success"))  # no pipeline needed here
++    monkeypatch.setattr(auth, "load_dotenv", lambda: None)
++    monkeypatch.setenv("SAFEVOICE_USERS", f"alice:{auth.hash_password('s3cret-pass')}")
++    for var in ("SAFEVOICE_MAX_ATTEMPTS", "SAFEVOICE_LOCKOUT_MINUTES"):
++        monkeypatch.delenv(var, raising=False)
++    auth._failures.clear()
++    yield
++    auth._failures.clear()
++
++
++# ---------------------------------------------------------------- W3-01 login
++
++def test_unknown_and_known_users_cost_the_same_hashing_work(monkeypatch):
++    calls = []
++    real = auth.hash_password
++    monkeypatch.setattr(auth, "hash_password", lambda *a, **k: calls.append(1) or real(*a, **k))
++    auth.check_login("alice", "wrong")
++    known = len(calls)
++    calls.clear()
++    auth.check_login("mallory", "wrong")
++    assert known == len(calls) == 1
++
++
++def test_lockout_after_repeated_failures_even_with_the_right_password():
++    for i in range(5):
++        assert auth.attempt_login("alice", "wrong", now=1000 + i)[1] == "invalid"
++    user, status, wait = auth.attempt_login("alice", "s3cret-pass", now=1010)
++    assert (user, status) == (None, "locked") and 0 < wait <= 15 * 60
++
++
++def test_lockout_expires():
++    for i in range(5):
++        auth.attempt_login("alice", "wrong", now=1000 + i)
++    assert auth.attempt_login("alice", "s3cret-pass", now=1000 + 15 * 60 + 10)[:2] == ("alice", "ok")
++
++
++def test_success_resets_the_counter():
++    for i in range(4):
++        auth.attempt_login("alice", "wrong", now=1000 + i)
++    assert auth.attempt_login("alice", "s3cret-pass", now=1010)[1] == "ok"
++    for i in range(4):  # four more failures are still below the limit of five
++        assert auth.attempt_login("alice", "wrong", now=1020 + i)[1] == "invalid"
++
++
++def test_unknown_usernames_are_throttled_too_and_do_not_lock_others():
++    for i in range(5):
++        auth.attempt_login("mallory", "x", now=1000 + i)
++    assert auth.attempt_login("mallory", "x", now=1010)[1] == "locked"  # same message as for a real user
++    assert auth.attempt_login("alice", "s3cret-pass", now=1010)[1] == "ok"
++
++
++def test_limits_can_be_configured(monkeypatch):
++    monkeypatch.setenv("SAFEVOICE_MAX_ATTEMPTS", "2")
++    auth.attempt_login("alice", "wrong", now=1000)
++    auth.attempt_login("alice", "wrong", now=1001)
++    assert auth.attempt_login("alice", "s3cret-pass", now=1002)[1] == "locked"
++
++
++def test_failure_table_cannot_grow_without_limit(monkeypatch):
++    monkeypatch.setattr(auth, "_MAX_TRACKED", 50)
++    for i in range(120):
++        auth.attempt_login(f"user{i}", "x", now=1000)
++    assert len(auth._failures) <= 50
++
++
++# ---------------------------------------------------------------- session clean-up
++
++def test_end_session_removes_user_and_half_typed_form_data():
++    state = {"user": "alice", "last_seen": 1.0, "rec_narrative": "private text", "flash": "x"}
++    auth.end_session(state)
++    assert state == {}
++
++
++def test_end_session_can_leave_a_notice_for_the_login_page():
++    state = {"user": "alice", "rec_narrative": "private text"}
++    auth.end_session(state, "You were logged out.")
++    assert state == {"notice": "You were logged out."}
++
++
++# ---------------------------------------------------------------- W3-02 ownership edge cases
++
++def _record(user="alice", **kw):
++    topic = store.create_topic(user, "T", "")
++    return topic, store.submit_record(user, topic["id"], "Title", "Narrative", {}, **kw)
++
++
++def test_chain_survives_a_missing_corrected_record():
++    _, rec = _record()
++    with sqlite3.connect(store.DB_PATH) as db:
++        db.execute("UPDATE records SET corrects = 'R-GONE' WHERE id = ?", (rec["id"],))
++    assert [r["id"] for r in store.get_chain("alice", store.get_record("alice", rec["id"]))] == [rec["id"]]
++
++
++def test_chain_survives_a_loop_in_the_links():
++    topic, a = _record()
++    b = store.submit_record("alice", topic["id"], "T2", "N2", {}, corrects=a["id"])
++    with sqlite3.connect(store.DB_PATH) as db:
++        db.execute("UPDATE records SET corrects = ? WHERE id = ?", (b["id"], a["id"]))
++    ids = [r["id"] for r in store.get_chain("alice", store.get_record("alice", a["id"]))]
++    assert sorted(ids) == sorted([a["id"], b["id"]])
++
++
++def test_chain_never_includes_another_users_records():
++    topic, a = _record("alice")
++    with sqlite3.connect(store.DB_PATH) as db:  # a foreign row that claims to correct alice's record
++        db.execute("INSERT INTO records VALUES ('R-EVIL', ?, 'bob', 't', 'n', '2026-01-01T00:00:00', ?, '', '{}', 'x', 'synced', '')",
++                   (topic["id"], a["id"]))
++    assert [r["id"] for r in store.get_chain("alice", a)] == [a["id"]]
++
++
++# ---------------------------------------------------------------- W3-05 audit log
++
++def test_audit_detail_is_truncated_and_stays_one_json_line():
++    audit.log("alice", "access_denied", detail="topic=" + "x\n" * 500)
++    lines = open(audit.AUDIT_LOG, encoding="utf-8").read().splitlines()
++    assert len(lines) == 1 and len(json.loads(lines[0])["detail"]) <= 200
++
++
++# ---------------------------------------------------------------- W3-03 AllegroGraph isolation
++
++class _FakeConn:
++    def __init__(self):
++        self.added = []
++        self.closed = False
++
++    def createURI(self, iri):
++        return ("URI", iri)
++
++    def addFile(self, path, base=None, format=None, context=None):
++        self.added.append(context)
++
++    def size(self):
++        return 1
++
++    def close(self):
++        self.closed = True
++
++
++def _ag_env(monkeypatch, **overrides):
++    """A complete, fake AllegroGraph configuration; the real .env must never leak into tests."""
++    monkeypatch.setattr(ingest, "load_dotenv", lambda *a, **k: None)
++    values = {"AG_BASE_URL": "https://ag.example.com/", "AG_REPO": "repo", "AG_USER": "u", "AG_PASSWORD": "pw",
++              "AG_PORT": None, "AG_CREATE_REPO": None, **overrides}
++    for name, value in values.items():
++        monkeypatch.delenv(name, raising=False) if value is None else monkeypatch.setenv(name, value)
++
++
++@pytest.fixture
++def fake_ag(monkeypatch, tmp_path):
++    _ag_env(monkeypatch)
++    conn, seen = _FakeConn(), {}
++    monkeypatch.setattr(ingest, "ag_connect", lambda **kw: seen.update(kw) or conn)
++    nt = tmp_path / "x.nt"
++    nt.write_text("<a> <b> <c> .\n")
++    return conn, seen, str(nt)
++
++
++def test_each_source_gets_its_own_named_graph(fake_ag):
++    conn, _, nt = fake_ag
++    assert ingest.ingest_rdf_file(nt, source_id="alice")
++    assert ingest.ingest_rdf_file(nt, source_id="bob")
++    assert conn.added == [("URI", ingest.graph_for_source("alice")), ("URI", ingest.graph_for_source("bob"))]
++    assert ingest.graph_for_source("alice") != ingest.graph_for_source("bob")
++
++
++@pytest.mark.parametrize("bad", ["../../x", "a/b", "", "a b", "x>y", None])
++def test_unsafe_source_id_is_refused_before_connecting(fake_ag, bad):
++    conn, seen, nt = fake_ag
++    assert ingest.ingest_rdf_file(nt, source_id=bad) is False
++    assert seen == {} and conn.added == []
++
++
++def test_repository_is_not_created_unless_enabled(fake_ag, monkeypatch):
++    _, seen, nt = fake_ag
++    ingest.ingest_rdf_file(nt, source_id="alice")
++    assert seen["create"] is False
++    monkeypatch.setattr(ingest, "AG_CREATE_REPO", True)
++    ingest.ingest_rdf_file(nt, source_id="alice")
++    assert seen["create"] is True
++
++
++def test_connection_is_closed_even_when_upload_fails(fake_ag, monkeypatch):
++    conn, _, nt = fake_ag
++    monkeypatch.setattr(conn, "addFile", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
++    assert ingest.ingest_rdf_file(nt, source_id="alice") is False and conn.closed
++
++
++# ---------------------------------------------------------------- AllegroGraph connection settings
++
++def test_host_is_normalised_and_settings_are_read_at_call_time(fake_ag, monkeypatch):
++    _, seen, nt = fake_ag
++    assert ingest.ingest_rdf_file(nt, source_id="alice")
++    assert seen["host"] == "ag.example.com" and seen["port"] == 443 and seen["protocol"] == "https"
++    monkeypatch.setenv("AG_REPO", "other_repo")  # .env corrected after the app started
++    monkeypatch.setenv("AG_PORT", "10035")
++    ingest.ingest_rdf_file(nt, source_id="alice")
++    assert seen["repo"] == "other_repo" and seen["port"] == 10035
++
++
++def test_missing_settings_are_named_and_no_connection_is_tried(fake_ag, monkeypatch):
++    conn, seen, nt = fake_ag
++    monkeypatch.delenv("AG_PASSWORD")
++    assert ingest.missing_settings() == ["AG_PASSWORD"]
++    assert ingest.ingest_rdf_file(nt, source_id="alice") is False
++    assert "AG_PASSWORD" in ingest.last_error and seen == {}
++
++
++def test_connection_error_is_kept_for_the_log_but_resets_on_success(fake_ag, monkeypatch):
++    conn, seen, nt = fake_ag
++    monkeypatch.setattr(ingest, "ag_connect", lambda **kw: (_ for _ in ()).throw(ConnectionError("no route to host")))
++    assert ingest.ingest_rdf_file(nt, source_id="alice") is False
++    assert "ConnectionError" in ingest.last_error and "no route" in ingest.last_error
++    monkeypatch.setattr(ingest, "ag_connect", lambda **kw: conn)
++    assert ingest.ingest_rdf_file(nt, source_id="alice") is True and ingest.last_error == ""
++
++
++def test_audit_log_gets_the_reason_but_the_user_gets_a_plain_message(monkeypatch):
++    monkeypatch.setattr(store, "run_pipeline", lambda df: (df, "Failed: Ingestion Error"))
++    monkeypatch.setattr(ingest, "last_error", "ConnectionError: no route to host")
++    _, rec = _record()
++    assert rec["sync_status"] == store.NOT_SYNCED and "database" in rec["sync_message"]
++    assert "no route to host" not in rec["sync_message"]
++    log = open(audit.AUDIT_LOG, encoding="utf-8").read()
++    assert "no route to host" in log and "Narrative" not in log
++
++
++def test_missing_settings_give_a_specific_user_message(monkeypatch):
++    monkeypatch.setattr(store, "run_pipeline", lambda df: (df, "Failed: Ingestion Error"))
++    monkeypatch.setattr(ingest, "last_error", "Missing in .env: AG_PASSWORD")
++    _, rec = _record()
++    assert "settings" in rec["sync_message"] and "database" in rec["sync_message"]
++
++
++def test_unexpected_error_is_logged_with_type_and_place_but_never_its_message(monkeypatch):
++    def boom(df):
++        raise RuntimeError("secret narrative text")
++    monkeypatch.setattr(store, "run_pipeline", boom)
++    _record()
++    log = open(audit.AUDIT_LOG, encoding="utf-8").read()
++    assert "RuntimeError at " in log and "secret narrative text" not in log
++
++
++# ---------------------------------------------------------------- python -m src.storage.check
++
++def test_check_script_reports_every_step(fake_ag, monkeypatch, capsys):
++    from src.storage import check
++    conn, _, _ = fake_ag
++    removed = []
++    monkeypatch.setattr(conn, "remove", lambda *a, **k: removed.append(k["contexts"]), raising=False)
++    monkeypatch.setattr(check, "check_dry_run", lambda: True)  # needs the repo's config files
++    assert check.main() == 0
++    out = capsys.readouterr().out
++    assert "[OK] 1." in out and "[OK] 3." in out and "[OK] 4." in out and "pw" not in out.replace("password", "")
++    assert removed == [[("URI", ingest.graph_for_source("_check"))]]
++
++
++def test_check_script_stops_at_missing_settings(fake_ag, monkeypatch, capsys):
++    from src.storage import check
++    monkeypatch.delenv("AG_REPO")
++    monkeypatch.setattr(check, "check_dry_run", lambda: True)
++    assert check.main() == 1
++    out = capsys.readouterr().out
++    assert "[FAILED] 1." in out and "AG_REPO" in out and "3." not in out
++
++
++def test_check_script_names_the_failing_upload_step(fake_ag, monkeypatch, capsys):
++    from src.storage import check
++    conn, _, _ = fake_ag
++    monkeypatch.setattr(conn, "addFile", lambda *a, **k: (_ for _ in ()).throw(PermissionError("no write access")))
++    monkeypatch.setattr(check, "check_dry_run", lambda: True)
++    assert check.main() == 1
++    out = capsys.readouterr().out
++    assert "[OK] 3." in out and "[FAILED] 4." in out and "no write access" in out
+diff --git a/ui/audit.py b/ui/audit.py
+index 9d9b373..0e7c12f 100644
+--- a/ui/audit.py
++++ b/ui/audit.py
+@@ -13,8 +13,9 @@ AUDIT_LOG = os.getenv("SAFEVOICE_AUDIT_LOG", os.path.join("data", "audit", "audi
+ 
+ def log(user, action, record_id=None, detail=""):
+     os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
++    # detail can contain text typed by a user (URL parameters, usernames): keep each line small.
+     line = json.dumps({"time": datetime.now().isoformat(timespec="seconds"), "user": user,
+-                       "action": action, "record_id": record_id, "detail": detail})
++                       "action": action, "record_id": record_id, "detail": str(detail)[:200]})
+     with open(AUDIT_LOG, "a", encoding="utf-8") as fh:
+         fh.write(line + "\n")
+ 
+diff --git a/ui/auth.py b/ui/auth.py
+index 95b69e1..8c875a2 100644
+--- a/ui/auth.py
++++ b/ui/auth.py
+@@ -11,11 +11,14 @@ import hmac
+ import os
+ import re
+ import secrets
++import threading
++import time
+ from getpass import getpass
+ 
+ from dotenv import load_dotenv
+ 
+ ITERATIONS = 200_000
++MIN_PASSWORD_LENGTH = 8
+ 
+ 
+ def hash_password(password, salt=None, iterations=ITERATIONS):
+@@ -24,6 +27,11 @@ def hash_password(password, salt=None, iterations=ITERATIONS):
+     return f"pbkdf2_sha256${iterations}${salt}${digest.hex()}"
+ 
+ 
++# Hashed once at import. Unknown usernames are checked against it, so an unknown and a known
++# username cost the same single PBKDF2 run and response time does not reveal which exist (W3-01).
++DUMMY_HASH = hash_password("not-a-real-password")
++
++
+ def idle_minutes():
+     """Minutes of inactivity before automatic logout (SAFEVOICE_IDLE_MINUTES, default 30)."""
+     load_dotenv()
+@@ -63,11 +71,102 @@ def check_login(username, password):
+     """Return the canonical username if the credentials are valid, else None."""
+     name = username.strip().lower()
+     stored = _allowed_users().get(name)
+-    # Hash even for unknown users so response time does not reveal which usernames exist.
+-    ok = _verify(password, stored or hash_password("x"))
++    # Verify even for unknown users so response time does not reveal which usernames exist.
++    ok = _verify(password, stored or DUMMY_HASH)
+     return name if stored and ok else None
+ 
+ 
++# ---------------------------------------------------------------- brute-force protection
++# Failed logins are counted per username in this process (all browser sessions share the count).
++# After SAFEVOICE_MAX_ATTEMPTS failures within SAFEVOICE_LOCKOUT_MINUTES the username is locked
++# until the oldest counted failure expires. Unknown usernames are counted too, so the lock
++# message does not reveal which usernames exist. The counts are lost when the app restarts.
++
++_failures = {}
++_failures_lock = threading.Lock()
++_MAX_TRACKED = 10_000
++
++
++def _int_env(name, default):
++    load_dotenv()
++    try:
++        return max(1, int(os.getenv(name, default)))
++    except ValueError:
++        return default
++
++
++def max_attempts():
++    return _int_env("SAFEVOICE_MAX_ATTEMPTS", 5)
++
++
++def lockout_seconds():
++    return _int_env("SAFEVOICE_LOCKOUT_MINUTES", 15) * 60
++
++
++def _key(username):
++    return username.strip().lower()[:32]
++
++
++def _recent_failures(key, now, window):
++    return sorted(t for t in _failures.get(key, []) if now - t < window)
++
++
++def lockout_remaining(username, now=None):
++    """Seconds until this username may try again (0 = not locked)."""
++    now = time.time() if now is None else now
++    window, limit = lockout_seconds(), max_attempts()
++    with _failures_lock:
++        recent = _recent_failures(_key(username), now, window)
++    if len(recent) < limit:
++        return 0
++    return max(1, int(recent[-limit] + window - now))
++
++
++def _record_failure(username, now, window):
++    with _failures_lock:
++        if len(_failures) >= _MAX_TRACKED:  # an attacker must not be able to grow this forever
++            for k in [k for k in _failures if not _recent_failures(k, now, window)]:
++                del _failures[k]
++            if len(_failures) >= _MAX_TRACKED:
++                _failures.clear()
++        key = _key(username)
++        _failures[key] = _recent_failures(key, now, window) + [now]
++
++
++def attempt_login(username, password, now=None):
++    """Check a login with lockout. Returns (username or None, status, seconds_to_wait).
++
++    status is "ok", "invalid" or "locked". While locked the password is not even checked.
++    """
++    now = time.time() if now is None else now
++    wait = lockout_remaining(username, now)
++    if wait:
++        return None, "locked", wait
++    user = check_login(username, password)
++    if user:
++        with _failures_lock:
++            _failures.pop(_key(username), None)
++        return user, "ok", 0
++    _record_failure(username, now, lockout_seconds())
++    return None, "invalid", 0
++
++
++def end_session(state, notice=None):
++    """Forget everything held for the logged-in user: identity, half-typed forms, flash messages.
++
++    `state` is st.session_state (or any dict). Clearing only the "user" key would leave one
++    user's unsent narrative and form values in the session for whoever logs in next.
++    """
++    state.clear()
++    if notice:
++        state["notice"] = notice
++
++
+ if __name__ == "__main__":
+     user = input("Username: ").strip().lower()
+-    print(f"\nAdd to SAFEVOICE_USERS in .env (separate several users with commas):\n{user}:{hash_password(getpass('Password: '))}")
++    password = getpass("Password: ")
++    if len(password) < MIN_PASSWORD_LENGTH:
++        raise SystemExit(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
++    if password != getpass("Repeat password: "):
++        raise SystemExit("Passwords do not match.")
++    print(f"\nAdd to SAFEVOICE_USERS in .env (separate several users with commas):\n{user}:{hash_password(password)}")
+diff --git a/ui/store.py b/ui/store.py
+index 0485e53..f2b9af1 100644
+--- a/ui/store.py
++++ b/ui/store.py
+@@ -11,6 +11,7 @@ the owner (W3-02), so one user can never see or change another user's data.
+ import json
+ import os
+ import sqlite3
++import traceback
+ import uuid
+ from contextlib import closing
+ from datetime import date, datetime
+@@ -133,7 +134,9 @@ def get_corrections(user, record_id):
+ 
+ def get_root(user, record):
+     """Follow 'corrects' links back to the original record."""
+-    while record and record["corrects"]:
++    seen = set()  # stops a loop if the corrects links were ever damaged
++    while record and record["corrects"] and record["id"] not in seen:
++        seen.add(record["id"])
+         record = get_record(user, record["corrects"])
+     return record
+ 
+@@ -141,9 +144,14 @@ def get_root(user, record):
+ def get_chain(user, record):
+     """Original record followed by all its corrections, in time order."""
+     root = get_root(user, record)
+-    chain, todo = [], [root]
++    if root is None:  # the corrected record is missing (or not this user's): show only this one
++        return [record]
++    chain, todo, seen = [], [root], set()
+     while todo:
+         r = todo.pop(0)
++        if r["id"] in seen:
++            continue
++        seen.add(r["id"])
+         chain.append(r)
+         todo.extend(get_corrections(user, r["id"]))
+     return sorted(chain, key=lambda r: r["submitted"])
+@@ -191,15 +199,30 @@ def run_pipeline(df):
+     return run_full_pipeline(df)
+ 
+ 
++def _ingest_reason():
++    """Why the last AllegroGraph upload failed (connection details only, never report content)."""
++    try:
++        from src.storage import ingest
++        return ingest.last_error or ""
++    except Exception:  # noqa: BLE001
++        return ""
++
++
+ def _sync(record):
+     """Run the pipeline for a stored record and save the outcome. Never raises."""
+     try:
+         _, status = run_pipeline(payload_to_frame(build_payload(record)))
+     except Exception as exc:  # noqa: BLE001 - shown to the user as a plain message, details go to the log
+         status = "Failed: unexpected error"
+-        audit.log(record["owner"], "record_sync_error", record["id"], type(exc).__name__)
++        # Exception type and place only: the message could contain report content.
++        where = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
++        place = f" at {os.path.basename(where.filename)}:{where.lineno}" if where else ""
++        audit.log(record["owner"], "record_sync_error", record["id"], type(exc).__name__ + place)
++    reason = _ingest_reason() if "Ingestion" in status else ""
+     if status == "Success":
+         state, message = SYNCED, ""
++    elif "Ingestion" in status and reason.startswith("Missing in .env"):
++        state, message = NOT_SYNCED, "The database settings in .env are incomplete."
+     elif "Ingestion" in status:
+         state, message = NOT_SYNCED, "The database could not be reached."
+     else:
+@@ -207,7 +230,8 @@ def _sync(record):
+     with closing(_connect()) as db, db:
+         db.execute("UPDATE records SET sync_status = ?, sync_message = ? WHERE id = ? AND owner = ?",
+                    (state, message, record["id"], record["owner"]))
+-    audit.log(record["owner"], "record_synced" if state == SYNCED else "record_not_synced", record["id"], status)
++    audit.log(record["owner"], "record_synced" if state == SYNCED else "record_not_synced", record["id"],
++              f"{status}: {reason}" if reason else status)
+     return get_record(record["owner"], record["id"])
+ 
+ 
+diff --git a/ui/views.py b/ui/views.py
+index bc5df09..6f6a4f9 100644
+--- a/ui/views.py
++++ b/ui/views.py
+@@ -50,11 +50,14 @@ def login_page():
+             password = st.text_input("Password", type="password")
+             submitted = st.form_submit_button("Log in", type="primary", width="stretch")
+         if submitted:
+-            user = auth.check_login(username, password)
+-            if user:
++            user, status, wait = auth.attempt_login(username, password)
++            if status == "ok":
+                 st.session_state.user = user
+                 audit.log(user, "login")
+                 go()
++            elif status == "locked":
++                audit.log(username.strip().lower()[:32], "login_locked")
++                st.error(f"Too many failed attempts. Try again in {-(-wait // 60)} minute(s).")
+             else:
+                 audit.log(username.strip().lower()[:32], "login_failed")
+                 st.error("Invalid username or password.")
+@@ -77,7 +80,7 @@ def sidebar(user, active_topic):
+         st.caption(f":material/person: {user}")
+         if st.button("Log out", icon=":material/logout:", type="tertiary"):
+             audit.log(user, "logout")
+-            st.session_state.pop("user", None)
++            auth.end_session(st.session_state)
+             go()

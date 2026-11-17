@@ -5,8 +5,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from ui import store
-from ui.nav import breadcrumb, flash, go, show_flash
+from ui import audit, auth, store
+from ui.nav import breadcrumb, flash, flash_error, go, show_flash
 
 DROP_DOWN_FILE_PATH = "config/UI_drop_downs.csv"
 NOT_PROVIDED = ":gray[Not provided]"
@@ -27,12 +27,13 @@ def options(column):
     return df[column].dropna().unique().tolist() if column in df.columns else []
 
 
+# Day without a leading zero. strftime("%-d") only works with glibc and raises ValueError on Windows.
 def fmt_dt(dt):
-    return dt.strftime("%-d %b %Y, %H:%M")
+    return f"{dt.day} {dt:%b %Y, %H:%M}"
 
 
 def fmt_d(dt):
-    return dt.strftime("%-d %b")
+    return f"{dt.day} {dt:%b}"
 
 
 # ---------------------------------------------------------------- login
@@ -42,19 +43,25 @@ def login_page():
     with mid:
         st.markdown("## :material/shield_lock: SafeVoice")
         st.caption("Secure reporting for sources.")
+        if notice := st.session_state.pop("notice", None):
+            st.info(notice)
         with st.form("login"):
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Log in", type="primary", width="stretch")
         if submitted:
-            # Prototype: any username and password are accepted. Real authentication replaces this (W3-01).
-            if username.strip():
-                st.session_state.user = username.strip()
-                st.session_state.pop("db", None)
+            user, status, wait = auth.attempt_login(username, password)
+            if status == "ok":
+                st.session_state.user = user
+                audit.log(user, "login")
                 go()
+            elif status == "locked":
+                audit.log(username.strip().lower()[:32], "login_locked")
+                st.error(f"Too many failed attempts. Try again in {-(-wait // 60)} minute(s).")
             else:
-                st.error("Enter a username.")
-        st.caption("Prototype login: any username and password work.")
+                audit.log(username.strip().lower()[:32], "login_failed")
+                st.error("Invalid username or password.")
+        st.caption("Demo login: users are defined in the .env file.")
 
 
 # ---------------------------------------------------------------- sidebar
@@ -72,8 +79,8 @@ def sidebar(user, active_topic):
         st.space("large")
         st.caption(f":material/person: {user}")
         if st.button("Log out", icon=":material/logout:", type="tertiary"):
-            for key in ("user", "db"):
-                st.session_state.pop(key, None)
+            audit.log(user, "logout")
+            auth.end_session(st.session_state)
             go()
 
 
@@ -101,7 +108,8 @@ def topic_overview(user):
         with cols[i % 3].container(border=True):
             if st.button(t["title"], key=f"open_{t['id']}", icon=":material/folder:", type="tertiary"):
                 go(topic=t["id"])
-            st.caption(f"{n} record{'s' if n != 1 else ''}  \nUpdated {fmt_d(store.last_activity(t))}")
+            st.caption(f"Created {fmt_d(t['created'])} {t['created']:%Y}  \n"
+                       f"{n} record{'s' if n != 1 else ''} · Updated {fmt_d(store.last_activity(t))}")
 
 
 def new_topic_page(user):
@@ -170,7 +178,7 @@ def _value(v, digits=None):
     if digits is not None and isinstance(v, (int, float)):
         return f"{v:.{digits}f}"
     if isinstance(v, date):
-        return v.strftime("%-d %b %Y")
+        return f"{v.day} {v:%b %Y}"
     return str(v)
 
 
@@ -201,7 +209,21 @@ def record_page(user, topic, record):
         meta += f" :blue-badge[Correction of {record['corrects']}]"
     if newer:
         meta += f" :orange-badge[Corrected by {newer[-1]['id']}]"
+    if record["sync_status"] != store.SYNCED:
+        meta += " :red-badge[Not yet in the database]"
     st.markdown(meta)
+    if record["sync_status"] != store.SYNCED:
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.caption(f"{record['sync_message'] or 'Waiting to be sent.'} Your record is saved and nothing is lost.")
+            if st.button("Retry", icon=":material/sync:", type="tertiary", key="retry"):
+                done = store.retry_sync(user, record["id"])
+                if done["sync_status"] == store.SYNCED:
+                    flash("Record saved to the database.")
+                else:
+                    flash_error(f"Still not in the database. {done['sync_message']}")
+                go(topic=topic["id"], record=record["id"])
+    if not store.verify_record(record):
+        st.error("Integrity check failed: this record's content no longer matches what was submitted.")
     if newer:
         with st.container(horizontal=True, vertical_alignment="center"):
             st.caption("You are viewing an older version of this record.")
@@ -234,7 +256,7 @@ def record_page(user, topic, record):
     row2 = st.columns(2)
     with row2[0]:
         _card("Trafficker", [
-            ("Number", _value(tr.get("number"))), ("Name or alias", _value(tr.get("name"))),
+            ("Number", _value(tr.get("number_of_traffickers"))), ("Name or alias", _value(tr.get("name"))),
             ("Nationality", _value(tr.get("nationality"))), ("Description", _value(tr.get("description"))),
         ])
     with row2[1]:
@@ -334,7 +356,11 @@ def _confirm(user, topic, payload):
     c1, c2 = st.columns(2)
     if c1.button("Submit", type="primary", width="stretch"):
         rec = store.submit_record(user, topic["id"], **payload)
-        flash(f"Record {rec['id']} submitted.")
+        if rec["sync_status"] == store.SYNCED:
+            flash(f"Record {rec['id']} submitted and saved to the database.")
+        else:
+            flash_error(f"Record {rec['id']} is saved, but not yet in the database. {rec['sync_message']} "
+                        "You can retry from the record page.")
         go(topic=topic["id"], record=rec["id"])
     if c2.button("Go back", width="stretch"):
         st.rerun()
@@ -387,7 +413,7 @@ def record_form(user, topic, original=None):
             situation = _select("Situation", "Situation", f"{fid}_sit", cv.get("situation"))
     with st.expander("Trafficker", icon=":material/person_alert:"):
         c1, c2, c3 = st.columns(3)
-        n_tr = c1.number_input("Number of traffickers", min_value=1, step=1, value=ct.get("number"),
+        n_tr = c1.number_input("Number of traffickers", min_value=1, step=1, value=ct.get("number_of_traffickers"),
                                key=f"{fid}_ntr", placeholder="Not provided")
         tr_name = c2.text_input("Name or alias", value=ct.get("name") or "", key=f"{fid}_trname")
         with c3:
@@ -405,7 +431,7 @@ def record_form(user, topic, original=None):
         "victim": {"number_of_victims": n_vic, "nationality": nat, "gender": gender, "age": age,
                    "situation": situation},
         "incident": {"departure": dep, "destination": dest},
-        "trafficker": {"number": n_tr, "name": tr_name.strip(), "nationality": tr_nat,
+        "trafficker": {"number_of_traffickers": n_tr, "name": tr_name.strip(), "nationality": tr_nat,
                        "description": tr_desc.strip()},
         "publication": {"name": pub_name.strip(), "link": pub_link.strip(), "date": pub_date},
     }

@@ -5,3 +5,7 @@ data/intermediate/*
 data/processed/processed_json_record/*
 data/processed/processed_nt_file/*
 data/raw/raw_json_record/*
+data/app/*
+data/audit/*
+.venv
+venv

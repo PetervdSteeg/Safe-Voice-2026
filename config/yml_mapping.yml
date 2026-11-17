@@ -25,9 +25,17 @@ mappings:
       - [schema:fromLocation, ex:departure_place_$(data_record_record_id)]
       - [schema:toLocation, ex:destination_place_$(data_record_record_id)]
       
-      # Incident
+      # Record
       - [cdm:recordId, $(data_record_record_id)]
       - [schema:identifier, $(data_record_record_id)]
+      - [cdm:incidentId, $(data_incident_incident_id)]
+      - [schema:name, $(data_record_title)]
+      - [schema:description, $(data_record_narrative)]
+      - [cdm:dateReceived, $(data_record_date_received), xsd:date]
+      - [cdm:dateRecorded, $(data_record_date_recorded), xsd:date]
+      - [schema:inLanguage, $(data_record_report_language)]
+      # Deferred to P4 (RDF model for topic, correction and provenance):
+      #   data_record_topic_id, data_record_corrects, data_record_correction_reason, data_record_source_id
       - [prov:wasAssociatedWith, ex:EEPA]
       
       # Publication
@@ -42,7 +50,7 @@ mappings:
       - [a, schema:Person]
       - [a, cdm:Victim]
       - [schema:Identifier, $(data_victim_victim_id)]
-      - [schema:Number, $(data_victim_count), xsd:integer]
+      - [schema:Number, $(data_victim_number_of_victims), xsd:integer]
       - [schema:Nationality, $(data_victim_nationality)]
       - [schema:Age, $(data_victim_age), xsd:integer]
       - [schema:Gender, $(data_victim_gender)]
@@ -61,6 +69,7 @@ mappings:
       - [schema:Name, $(data_trafficker_name)]
       - [schema:Nationality, $(data_trafficker_nationality)]
       - [schema:Description, $(data_trafficker_description)]
+      - [schema:Number, $(data_trafficker_number_of_traffickers), xsd:integer]
 
   # 4. Victim Current Location
   victim_current_place_mapping:
@@ -71,7 +80,7 @@ mappings:
       - [schema:addressCountry, $(data_victim_current_location_country)]
       - [schema:addressRegion, $(data_victim_current_location_state)] 
       - [schema:addressLocality, $(data_victim_current_location_town)] 
-      - [schema:description, $(data_victim_current_location_village)] 
+      - [cdm:village, $(data_victim_current_location_village)]
       - [schema:latitude, $(data_victim_current_location_latitude), xsd:float]
       - [schema:longitude, $(data_victim_current_location_longitude), xsd:float]
 
@@ -85,11 +94,13 @@ mappings:
       - [schema:addressCountry, $(data_incident_departure_country)] 
       - [schema:addressRegion, $(data_incident_departure_state)]
       - [schema:addressLocality, $(data_incident_departure_town)]
+      - [cdm:village, $(data_incident_departure_village)]
       - [schema:latitude, $(data_incident_departure_latitude), xsd:float]
       - [schema:longitude, $(data_incident_departure_longitude), xsd:float]
       - [schema:name, $(data_incident_departure_name)]
-      - [schema:description, $(data_incident_departure_type)]
+      - [cdm:locationType, $(data_incident_departure_type)]
       - [schema:description, $(data_incident_departure_description)]
+      - [cdm:departureDate, $(data_incident_departure_date), xsd:date]
 
 
   # 6. Destination / ToLocation
@@ -102,10 +113,13 @@ mappings:
       - [schema:addressCountry, $(data_incident_destination_country)]
       - [schema:addressRegion, $(data_incident_destination_state)]
       - [schema:addressLocality, $(data_incident_destination_town)]
+      - [cdm:village, $(data_incident_destination_village)]
       - [schema:latitude, $(data_incident_destination_latitude), xsd:float]
       - [schema:longitude, $(data_incident_destination_longitude), xsd:float]
-      - [schema:description, $(data_incident_destination_type)]
+      - [schema:name, $(data_incident_destination_name)]
+      - [cdm:locationType, $(data_incident_destination_type)]
       - [schema:description, $(data_incident_destination_description)]
+      - [cdm:arrivalDate, $(data_incident_destination_date), xsd:date]
 
   # 7. Publication
   publication_mapping:
@@ -116,4 +130,4 @@ mappings:
       - [schema:identifier, $(data_record_record_id)]
       - [schema:name, $(data_publication_name)]
       - [schema:url, $(data_publication_link)]
-      - [schema:datePublished, $(data_publication_date)]
+      - [schema:datePublished, $(data_publication_date), xsd:date]

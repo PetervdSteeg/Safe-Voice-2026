@@ -1,128 +1,142 @@
-"""Dummy data store for the UI prototype.
+"""Persistent store for topics and records (P3-1, P3-2).
 
-Everything is kept in st.session_state, so data resets when the browser tab is
-reloaded. The functions below are the interface the UI uses; later they can be
-replaced by the real topic/record model without changing the screens.
+SQLite (standard library) in data/app/safevoice.db keeps what the UI lists: topics, immutable
+records, their sync status. AllegroGraph stays the RDF store; every submitted record is
+sent through the pipeline (cleaning -> RDF -> AllegroGraph) by submit_record().
+
+The functions below are the interface the screens use. Every read and write is filtered by
+the owner (W3-02), so one user can never see or change another user's data.
 """
 
+import json
+import os
+import sqlite3
+import traceback
 import uuid
-from datetime import datetime
+from contextlib import closing
+from datetime import date, datetime
 
-import streamlit as st
+from src.orchestrator.payload import build_payload, payload_to_frame
+from ui import audit
+
+DB_PATH = os.getenv("SAFEVOICE_DB", os.path.join("data", "app", "safevoice.db"))
+
+SYNCED, NOT_SYNCED = "synced", "not_synced"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS topics (
+    id TEXT PRIMARY KEY, owner TEXT NOT NULL, title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS records (
+    id TEXT PRIMARY KEY, topic_id TEXT NOT NULL REFERENCES topics(id), owner TEXT NOT NULL,
+    title TEXT NOT NULL, narrative TEXT NOT NULL, submitted TEXT NOT NULL,
+    corrects TEXT, reason TEXT NOT NULL DEFAULT '', data TEXT NOT NULL,
+    hash TEXT NOT NULL, sync_status TEXT NOT NULL, sync_message TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS idx_records_owner ON records(owner, topic_id);
+"""
+
+# Date values inside a record's "data", stored as ISO text and turned back into dates on read.
+_DATE_PATHS = [("incident", "departure", "date"), ("incident", "destination", "date"), ("publication", "date")]
+
+
+def _connect():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA)
+    return conn
 
 
 def _new_id(prefix):
-    return f"{prefix}-{uuid.uuid4().hex[:6].upper()}"
+    """Random ID, e.g. R-3F9A1C7B2D. The table's primary key guarantees uniqueness (W1-04)."""
+    return f"{prefix}-{uuid.uuid4().hex[:10].upper()}"
 
 
-def _seed(user):
-    """Create example topics and records owned by the logged-in user.
-
-    One topic belongs to "other_user", to show that you can't open other people's topics.
-    """
-    topics = [
-        {"id": "T-0001", "owner": user, "title": "Border crossing 2026",
-         "description": "Reports about movements across the Sudan-Libya route.",
-         "created": datetime(2026, 10, 3, 10, 12)},
-        {"id": "T-0002", "owner": user, "title": "Labour exploitation",
-         "description": "Forced labour on farms and construction sites.",
-         "created": datetime(2026, 10, 15, 16, 40)},
-        {"id": "T-0003", "owner": user, "title": "Online recruitment",
-         "description": "Fake job offers shared through social media.",
-         "created": datetime(2026, 10, 21, 9, 5)},
-        {"id": "T-0004", "owner": "other_user", "title": "Camp transfers",
-         "description": "Transfers between refugee camps.",
-         "created": datetime(2026, 11, 1, 11, 0)},
-    ]
-    base = {
-        "victim": {"number_of_victims": 8, "nationality": "Eritrea", "gender": None, "age": None,
-                   "situation": "En route"},
-        "incident": {
-            "departure": {"country": "Sudan", "town": "Kassala", "date": None,
-                          "latitude": 15.45, "longitude": 36.4},
-            "destination": {"country": None, "town": "Tripoli", "date": None,
-                            "latitude": None, "longitude": None},
-        },
-        "trafficker": {"number": 2, "nationality": None, "description": ""},
-        "publication": {"name": "", "link": "", "date": None},
-    }
-    records = [
-        {"id": "R-0137", "topic_id": "T-0001", "owner": user, "title": "Witness statement",
-         "narrative": "A witness described a truck leaving the camp at night with about twenty people.",
-         "submitted": datetime(2026, 11, 4, 13, 20), "corrects": None, "reason": "",
-         "data": base},
-        {"id": "R-0142", "topic_id": "T-0001", "owner": user, "title": "Group transfer near border",
-         "narrative": "A group of around eight people was moved across the border at night by two men. "
-                      "They were held in a house for several days before being transported further north.",
-         "submitted": datetime(2026, 11, 9, 14, 32), "corrects": None, "reason": "",
-         "data": base},
-        {"id": "R-0151", "topic_id": "T-0001", "owner": user, "title": "Group transfer near border",
-         "narrative": "A group of around eight people was moved across the border at night by two men. "
-                      "They were held in a house for several days before being transported further north.",
-         "submitted": datetime(2026, 11, 10, 9, 15), "corrects": "R-0142",
-         "reason": "Departure town was wrong.",
-         "data": {**base, "incident": {**base["incident"],
-                                       "departure": {**base["incident"]["departure"], "town": "Wad Sharifey"}}}},
-        {"id": "R-0120", "topic_id": "T-0002", "owner": user, "title": "Farm workers without pay",
-         "narrative": "Several workers reported that their documents were taken and wages withheld.",
-         "submitted": datetime(2026, 11, 2, 8, 45), "corrects": None, "reason": "",
-         "data": {"victim": {"number_of_victims": 5}}},
-    ]
-    return {"topics": topics, "records": records}
+def _dumps(data):
+    return json.dumps(data, default=lambda o: o.isoformat(), ensure_ascii=False)
 
 
-def _db():
-    if "db" not in st.session_state:
-        st.session_state.db = _seed(st.session_state.get("user", "demo"))
-    return st.session_state.db
+def _loads(text):
+    data = json.loads(text)
+    for path in _DATE_PATHS:
+        node = data
+        for key in path[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict) and node.get(path[-1]):
+            node[path[-1]] = date.fromisoformat(node[path[-1]])
+    return data
+
+
+def _topic(row):
+    return {**dict(row), "created": datetime.fromisoformat(row["created"])}
+
+
+def _record(row):
+    return {**dict(row), "submitted": datetime.fromisoformat(row["submitted"]), "data": _loads(row["data"])}
 
 
 # ---- Topics ----
 
 def get_topics(user):
     """Topics owned by this user, most recently active first."""
-    topics = [t for t in _db()["topics"] if t["owner"] == user]
+    with closing(_connect()) as db:
+        topics = [_topic(r) for r in db.execute("SELECT * FROM topics WHERE owner = ?", (user,))]
     return sorted(topics, key=last_activity, reverse=True)
 
 
 def get_topic(user, topic_id):
     """Return the topic only if this user owns it (ownership check, W3-02)."""
-    return next((t for t in _db()["topics"] if t["id"] == topic_id and t["owner"] == user), None)
+    with closing(_connect()) as db:
+        row = db.execute("SELECT * FROM topics WHERE id = ? AND owner = ?", (topic_id, user)).fetchone()
+    return _topic(row) if row else None
 
 
 def create_topic(user, title, description):
     topic = {"id": _new_id("T"), "owner": user, "title": title, "description": description,
              "created": datetime.now()}
-    _db()["topics"].append(topic)
+    with closing(_connect()) as db, db:
+        db.execute("INSERT INTO topics VALUES (?, ?, ?, ?, ?)",
+                   (topic["id"], user, title, description, topic["created"].isoformat()))
+    audit.log(user, "topic_created", detail=topic["id"])
     return topic
 
 
 def last_activity(topic):
-    times = [r["submitted"] for r in _db()["records"] if r["topic_id"] == topic["id"]]
-    return max(times + [topic["created"]])
+    with closing(_connect()) as db:
+        row = db.execute("SELECT MAX(submitted) FROM records WHERE topic_id = ? AND owner = ?",
+                         (topic["id"], topic["owner"])).fetchone()
+    return max(datetime.fromisoformat(row[0]), topic["created"]) if row[0] else topic["created"]
 
 
 # ---- Records ----
 
 def get_records(user, topic_id):
     """All records in a topic for this user, oldest first."""
-    recs = [r for r in _db()["records"] if r["topic_id"] == topic_id and r["owner"] == user]
-    return sorted(recs, key=lambda r: r["submitted"])
+    with closing(_connect()) as db:
+        rows = db.execute("SELECT * FROM records WHERE topic_id = ? AND owner = ? ORDER BY submitted",
+                          (topic_id, user)).fetchall()
+    return [_record(r) for r in rows]
 
 
 def get_record(user, record_id):
-    return next((r for r in _db()["records"] if r["id"] == record_id and r["owner"] == user), None)
+    with closing(_connect()) as db:
+        row = db.execute("SELECT * FROM records WHERE id = ? AND owner = ?", (record_id, user)).fetchone()
+    return _record(row) if row else None
 
 
 def get_corrections(user, record_id):
     """Corrections that directly correct this record, oldest first."""
-    recs = [r for r in _db()["records"] if r["corrects"] == record_id and r["owner"] == user]
-    return sorted(recs, key=lambda r: r["submitted"])
+    with closing(_connect()) as db:
+        rows = db.execute("SELECT * FROM records WHERE corrects = ? AND owner = ? ORDER BY submitted",
+                          (record_id, user)).fetchall()
+    return [_record(r) for r in rows]
 
 
 def get_root(user, record):
     """Follow 'corrects' links back to the original record."""
-    while record and record["corrects"]:
+    seen = set()  # stops a loop if the corrects links were ever damaged
+    while record and record["corrects"] and record["id"] not in seen:
+        seen.add(record["id"])
         record = get_record(user, record["corrects"])
     return record
 
@@ -130,21 +144,100 @@ def get_root(user, record):
 def get_chain(user, record):
     """Original record followed by all its corrections, in time order."""
     root = get_root(user, record)
-    chain, todo = [], [root]
+    if root is None:  # the corrected record is missing (or not this user's): show only this one
+        return [record]
+    chain, todo, seen = [], [root], set()
     while todo:
         r = todo.pop(0)
+        if r["id"] in seen:
+            continue
+        seen.add(r["id"])
         chain.append(r)
         todo.extend(get_corrections(user, r["id"]))
     return sorted(chain, key=lambda r: r["submitted"])
 
 
-def submit_record(user, topic_id, title, narrative, data, corrects=None, reason=""):
-    """Store a new immutable record. ID and timestamp are generated here (W1-04).
+def verify_record(record):
+    """True if the stored content still matches the hash taken at submission (W3-05)."""
+    return audit.record_hash(record) == record["hash"]
 
-    TODO: call the real pipeline (cleaning, RDF mapping, AllegroGraph ingestion) here.
+
+def submit_record(user, topic_id, title, narrative, data, corrects=None, reason=""):
+    """Store a new immutable record and send it through the pipeline.
+
+    ID and timestamp are generated here. The record is saved first; if the pipeline or the
+    database is unavailable it stays saved with sync_status "not_synced" and can be retried
+    with retry_sync(). Raises PermissionError if the topic (or the corrected record) is not the user's.
     """
-    record = {"id": _new_id("R"), "topic_id": topic_id, "owner": user, "title": title,
-              "narrative": narrative, "submitted": datetime.now(), "corrects": corrects,
-              "reason": reason, "data": data}
-    _db()["records"].append(record)
-    return record
+    if not get_topic(user, topic_id):
+        raise PermissionError("Topic not found or not owned by this user.")
+    if corrects:
+        original = get_record(user, corrects)
+        if not original or original["topic_id"] != topic_id:
+            raise PermissionError("Corrected record not found in this topic.")
+
+    record = {"topic_id": topic_id, "owner": user, "title": title, "narrative": narrative,
+              "submitted": datetime.now(), "corrects": corrects, "reason": reason, "data": data}
+    while True:
+        record["id"] = _new_id("R")
+        record["hash"] = audit.record_hash(record)
+        try:
+            with closing(_connect()) as db, db:
+                db.execute("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           (record["id"], topic_id, user, title, narrative, record["submitted"].isoformat(),
+                            corrects, reason, _dumps(data), record["hash"], NOT_SYNCED, ""))
+            break
+        except sqlite3.IntegrityError:
+            continue  # ID collision (vanishingly rare): draw another
+    audit.log(user, "record_submitted", record["id"], f"topic {topic_id}")
+    return _sync(get_record(user, record["id"]))
+
+
+def run_pipeline(df):
+    """Indirection so tests can replace the pipeline (it needs a live AllegroGraph)."""
+    from src.orchestrator import run_full_pipeline
+    return run_full_pipeline(df)
+
+
+def _ingest_reason():
+    """Why the last AllegroGraph upload failed (connection details only, never report content)."""
+    try:
+        from src.storage import ingest
+        return ingest.last_error or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _sync(record):
+    """Run the pipeline for a stored record and save the outcome. Never raises."""
+    try:
+        _, status = run_pipeline(payload_to_frame(build_payload(record)))
+    except Exception as exc:  # noqa: BLE001 - shown to the user as a plain message, details go to the log
+        status = "Failed: unexpected error"
+        # Exception type and place only: the message could contain report content.
+        where = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
+        place = f" at {os.path.basename(where.filename)}:{where.lineno}" if where else ""
+        audit.log(record["owner"], "record_sync_error", record["id"], type(exc).__name__ + place)
+    reason = _ingest_reason() if "Ingestion" in status else ""
+    if status == "Success":
+        state, message = SYNCED, ""
+    elif "Ingestion" in status and reason.startswith("Missing in .env"):
+        state, message = NOT_SYNCED, "The database settings in .env are incomplete."
+    elif "Ingestion" in status:
+        state, message = NOT_SYNCED, "The database could not be reached."
+    else:
+        state, message = NOT_SYNCED, "The record could not be prepared for the database."
+    with closing(_connect()) as db, db:
+        db.execute("UPDATE records SET sync_status = ?, sync_message = ? WHERE id = ? AND owner = ?",
+                   (state, message, record["id"], record["owner"]))
+    audit.log(record["owner"], "record_synced" if state == SYNCED else "record_not_synced", record["id"],
+              f"{status}: {reason}" if reason else status)
+    return get_record(record["owner"], record["id"])
+
+
+def retry_sync(user, record_id):
+    """Send a record that is not yet in the database through the pipeline again."""
+    record = get_record(user, record_id)
+    if record is None:
+        raise PermissionError("Record not found.")
+    return record if record["sync_status"] == SYNCED else _sync(record)

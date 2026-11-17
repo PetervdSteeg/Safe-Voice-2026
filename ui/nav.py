@@ -40,6 +40,13 @@ def flash(message):
     st.session_state["flash"] = message
 
 
+def flash_error(message):
+    """Like flash(), but shown as a warning."""
+    st.session_state["flash_error"] = message
+
+
 def show_flash():
     if msg := st.session_state.pop("flash", None):
         st.success(msg, icon=":material/check_circle:")
+    if msg := st.session_state.pop("flash_error", None):
+        st.warning(msg, icon=":material/sync_problem:")

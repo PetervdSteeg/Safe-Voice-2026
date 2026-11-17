@@ -1,0 +1,93 @@
+                 Design Document Front-End SafeVoice
+
+Proposed changes to the SafeVoice front-end, prioritised with MoSCoW (Must, Should,
+Could, Won’t), for feedback before implementation. Codes such as W1-06 refer to
+ﬁndings in the Technical Plan.
+
+User ﬂow:
+Login page ó Topic overview ó Topic-speciﬁc record overview ó Record detail
+
+From the topic overview the user can create a new topic, from the record overview the
+user can add a new record to the topic, and from the record detail the user can submit a
+correction.
+
+General (all pages):                                                       Must
+ Navigation menu to move between pages and back                            Must
+ Logout button                                                             Must
+ Clear error messages instead of technical error output                    Should
+ Consistent layout and colour theme across all pages                       Should
+ Short help text per ﬁeld explaining what to ﬁll in                        Could
+ Usable on a mobile phone (small screen)
+
+Login page:                                                                Must
+ Fields for username and password                                          Must
+ Error message when incorrect username and/or password                     Must
+ Login replaces the manually typed Source ID; the user identity comes
+ from the login (W3-01)                                                    Should
+ Automatic logout after a period of inactivity                             Won’t
+ Forgot username/password                                                  Won’t
+ Legal Disclaimer
+
+Topic overview:                                                            Must
+ Only shows the user’s own topics (W3-02)                                  Must
+ Shows per topic: title, creation date, number of records and last update  Must
+ Topics sorted by most recent activity                                     Must
+ Button to create a new topic                                              Should
+ Search and ﬁlter topics
+
+New topic:                                                                 Must
+ Fields for title and short description                                    Must
+ Automatically generated unique topic ID and creation date
+Topic-speciﬁc record overview:                                              Must
+ Only shows the user’s own records for this topic (W3-02)                   Must
+ Shows per record: name, record ID, submission date and whether it has
+ been corrected/updated                                                     Must
+ Records sorted by submission date                                          Must
+ Button to add a new record to this topic                                   Should
+ Filter records on ﬁeld values (existing Manage Reports feature)
+
+New record:                                                                 Must
+ Narrative text box at the top                                              Must
+ Structured ﬁelds below the narrative, grouped in collapsible sections
+ (Incident, Victim, TraYicker, Publication)                                 Must
+ Ability to name the record                                                 Must
+ Automatically generated unique record ID that cannot be edited (W1-04)     Must
+ Automatically generated submission timestamp                               Must
+ Every ﬁeld empty by default, including drop-downs, coordinates and age,
+ so no 0 or ﬁrst option is ﬁlled in (W1-06)                                 Must
+ Required-ﬁelds checker that shows which ﬁelds are missing                  Must
+ Input correctness checker: no dates in the future, departure date before
+ arrival date, valid age, valid coordinates and valid URLs                  Must
+ Conﬁrmation step before submitting                                         Must
+ Feedback after submitting: a success message or a clear error message      Should
+ Upload documents (prototype: dummy ﬁles only)                              Could
+ Save as draft, so a long narrative is not lost when the page is refreshed  Won’t
+ Automated information extraction from the narrative using an encoder
+ on narrative box like BERT
+
+Record detail:                                                              Must
+ Read-only view of a submitted record                                       Must
+ Shows the cleaned data, not the raw input with exact coordinates (W4-
+ 02)                                                                        Must
+ Button to submit a correction                                              Must
+ Shows the correction history: the original record and its linked
+ corrections (GitHub like)                                                  Should
+ Shows attached documents
+
+Submit correction:                                                          Must
+ Form pre-ﬁlled with the data of the record being corrected                 Must
+ Correction is saved as a new record linked to the original; the original
+ stays unchanged                                                            Should
+ Field for the reason of the correction
+
+Open questions:
+1. Is a record only owned by one user, or should they be able to share a record?
+2. Are there other roles, for example an aid-organization who can see all topics and
+records?
+3. Which ﬁelds should a topic have besides a title and description?
+4. What is the minimum information required to submit a record?
+5. What may be corrected, and when should a new record be made or the previous
+deleted?
+6. Will users use the application on a mobile phone?
+7. Which types of documents need to be uploaded?
+

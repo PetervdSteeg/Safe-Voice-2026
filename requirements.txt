@@ -1,0 +1,8 @@
+# Tested with Python 3.11 on Windows. Exact pins = the versions in the working .venv.
+# streamlit >= 1.50 is required by the new UI (st.space, horizontal containers, width="stretch").
+streamlit==1.67.0
+pandas==3.0.6
+numpy==2.4.6
+PyYAML==6.0.3
+python-dotenv==1.2.4
+agraph-python==105.4.0
