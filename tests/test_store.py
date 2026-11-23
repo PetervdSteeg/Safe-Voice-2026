@@ -11,7 +11,7 @@ from ui import audit, auth, store
 DATA = {
     "victim": {"number_of_victims": 3, "nationality": "Eritrea", "gender": None, "age": 17, "situation": None},
     "incident": {"departure": {"country": "Sudan", "town": "Kassala", "date": date(2026, 1, 5),
-                               "latitude": 15.4512, "longitude": 36.4},
+                               "latitude": 15.451, "longitude": 36.4},
                  "destination": {"country": None, "town": "Tripoli", "date": None,
                                  "latitude": None, "longitude": None}},
     "trafficker": {"number_of_traffickers": 2, "name": "", "nationality": None, "description": ""},

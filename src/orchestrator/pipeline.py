@@ -6,6 +6,7 @@ from src.cleaning import run_clean_pipeline
 from src.transform import save_triples_to_file
 from src.storage import ingest_rdf_file
 from src.orchestrator.payload import is_safe_id
+from src.validation import shacl
 
 # --- File Path Configuration ---
 BASE_DATA_DIR = "data"
@@ -16,7 +17,7 @@ os.makedirs(PROCESSED_NT_DIR, exist_ok=True)
 def run_full_pipeline(raw_df):
     """
     Executes the data processing workflow for a single report record:
-    clean -> RDF -> AllegroGraph. Returns (cleaned_df, status), where status is "Success"
+    clean -> RDF -> shape validation -> AllegroGraph. Returns (cleaned_df, status), where status is "Success"
     or "Failed: <reason>". Nothing is written to disk before the record is valid, and the
     only file is the .nt named after the server-generated record ID (P2-3, P3-5).
     """
@@ -48,6 +49,16 @@ def run_full_pipeline(raw_df):
     if not nt_file_path:
         print("[PIPELINE] Error: No RDF file produced.")
         return cleaned_df, "Failed: RDF Generation Error"
+
+    # 2b. Check the graph against the shared HDS shapes (W2-02) before anything is uploaded
+    conforms, problems = shacl.validate_nt_file(nt_file_path)
+    if not conforms:
+        print(f"[PIPELINE] ERROR: RDF does not conform to the HDS shapes: {problems}")
+        try:
+            os.remove(nt_file_path)
+        except OSError:
+            pass
+        return cleaned_df, "Failed: Validation Error"
 
     # 3. Ingestion to triplestore
     print(f"[PIPELINE] Ingesting {output_filename}...")

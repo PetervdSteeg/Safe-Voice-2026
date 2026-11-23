@@ -305,13 +305,16 @@ def _location_fields(prefix, title, cur):
         when = st.date_input("Date", value=cur.get("date"), key=f"{prefix}_date", format="DD/MM/YYYY")
     c4, c5, c6 = st.columns(3)
     with c4:
-        lat = st.number_input("Latitude", value=cur.get("latitude"), format="%.4f", key=f"{prefix}_lat",
+        lat = st.number_input("Latitude", value=cur.get("latitude"), format="%.3f", key=f"{prefix}_lat",
                               placeholder="Not provided")
     with c5:
-        lon = st.number_input("Longitude", value=cur.get("longitude"), format="%.4f", key=f"{prefix}_lon",
+        lon = st.number_input("Longitude", value=cur.get("longitude"), format="%.3f", key=f"{prefix}_lon",
                               placeholder="Not provided")
     with c6:
         loc_type = _select("Location type", "Type of location", f"{prefix}_type", cur.get("type"))
+    # Coordinates are kept to 3 decimals (about 110 m); see store.COORD_DECIMALS.
+    lat = None if lat is None else round(lat, 3)
+    lon = None if lon is None else round(lon, 3)
     return {"country": country, "town": town.strip(), "date": when, "latitude": lat, "longitude": lon,
             "type": loc_type}
 

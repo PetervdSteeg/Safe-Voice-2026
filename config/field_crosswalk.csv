@@ -1,53 +1,53 @@
 ﻿group,field,flat_column,origin,old_form,new_form,decision,rdf_scope,rdf_predicates,notes
-Record,record_id,data_record_record_id,generated,typed,no,GENERATE server-side,mapped,case_mapping: schema:fromLocation | case_mapping: schema:toLocation | case_mapping: cdm:recordId | case_mapping: schema:identifier | case_mapping: schema:mainEntityOfPage | case_mapping: (node name) | victim_mapping: schema:Location | victim_current_place_mapping: (node name) | departure_place_mapping: (node name) | destination_place_mapping: (node name) | publication_mapping: schema:identifier | publication_mapping: (node name),Today a typed text box. The new app already creates IDs like R-0137; use one scheme for the whole pipeline (see P3-6 uniqueness).
-Record,source_id,data_record_source_id,from login,typed in sidebar,no,GENERATE: take from logged-in user,deferred (P4),,"DECIDE: is source_id the username, or an organisation ID several users share? (Q1/Q2). Deferred to P4-3 (provenance)."
-Record,topic_id,data_record_topic_id,from topic,n/a,implicit,NEW field,deferred (P4),,Deferred to P4-1 (topic node and link).
-Record,title,data_record_title,user,n/a,yes,NEW field,mapped,case_mapping: schema:name,Record name; proposed schema:name.
-Record,narrative,data_record_narrative,user,n/a,yes,NEW field,mapped,case_mapping: schema:description,Free text; proposed schema:description. Privacy review needed (P5-2).
-Record,date_received,data_record_date_received,user,yes,no,RESTORE in form,mapped,case_mapping: cdm:dateReceived,
-Record,date_recorded,data_record_date_recorded,generated,"form only, NOT in payload",no,GENERATE: set to submission time,mapped,case_mapping: cdm:dateRecorded,"Old form asked for it but never put it in the JSON, so it never reached the CDM. Make it automatic."
-Record,report_language,data_record_report_language,user,no,no,DECIDE: add a language dropdown?,mapped,case_mapping: schema:inLanguage,"In the CDM (en; ti) but in no form, no JSON and no YAML."
-Record,corrects,data_record_corrects,from correction flow,n/a,implicit,NEW field,deferred (P4),,ID of the record being corrected; Deferred to P4-1 (prov:wasRevisionOf).
-Record,correction_reason,data_record_correction_reason,user,n/a,yes,NEW field,deferred (P4),,Reason text. Deferred to P4-1. The CDM has an 'Updates' level for this; see last row.
-Victim,victim_id,data_victim_victim_id,generated,typed,no,GENERATE server-side,mapped,case_mapping: cdm:hasVictim | victim_mapping: schema:Identifier | victim_mapping: (node name),Name of the victim node in RDF. Generated per record.
-Victim,number_of_victims,data_victim_number_of_victims,user,yes,yes,KEEP,mapped,victim_mapping: schema:Number,
-Victim,nationality,data_victim_nationality,user,yes,yes,KEEP,mapped,victim_mapping: schema:Nationality,
-Victim,gender,data_victim_gender,user,yes,yes,KEEP,mapped,victim_mapping: schema:Gender,
-Victim,age,data_victim_age,user,yes,yes,KEEP,mapped,victim_mapping: schema:Age,
-Victim,situation,data_victim_situation,user,yes,yes,KEEP,mapped,victim_mapping: schema:Status,
-Victim,description,data_victim_description,user,yes,no,RESTORE in form,mapped,victim_mapping: schema:Description,Free text; privacy review (P5-2).
-Victim current location,country,data_victim_current_location_country,user,yes,no,RESTORE in form,mapped,victim_current_place_mapping: schema:addressCountry,"Restore for all topics (decision: add everywhere, hide per topic later)."
-Victim current location,state,data_victim_current_location_state,user,yes,no,RESTORE in form,mapped,victim_current_place_mapping: schema:addressRegion,"Restore for all topics (decision: add everywhere, hide per topic later)."
-Victim current location,town,data_victim_current_location_town,user,yes,no,RESTORE in form,mapped,victim_current_place_mapping: schema:addressLocality,"Restore for all topics (decision: add everywhere, hide per topic later)."
-Victim current location,village,data_victim_current_location_village,user,yes,no,RESTORE in form,mapped,victim_current_place_mapping: cdm:village,"Restore for all topics (decision: add everywhere, hide per topic later)."
-Victim current location,latitude,data_victim_current_location_latitude,user,yes,no,RESTORE in form,mapped,victim_current_place_mapping: schema:latitude,"Restore for all topics (decision: add everywhere, hide per topic later). Coordinate precision: P5-1."
-Victim current location,longitude,data_victim_current_location_longitude,user,yes,no,RESTORE in form,mapped,victim_current_place_mapping: schema:longitude,"Restore for all topics (decision: add everywhere, hide per topic later). Coordinate precision: P5-1."
-Incident,incident_id,data_incident_incident_id,generated,typed,no,GENERATE server-side,mapped,case_mapping: cdm:incidentId,
-Incident departure,country,data_incident_departure_country,user,yes,yes,KEEP,mapped,departure_place_mapping: schema:addressCountry,
-Incident departure,state,data_incident_departure_state,user,yes,no,RESTORE in form,mapped,departure_place_mapping: schema:addressRegion,
-Incident departure,town,data_incident_departure_town,user,yes,yes (merged with village),KEEP,mapped,departure_place_mapping: schema:addressLocality,New form merged town and village into one box; split again so village is its own field.
-Incident departure,village,data_incident_departure_village,user,yes,no,RESTORE in form,mapped,departure_place_mapping: cdm:village,
-Incident departure,latitude,data_incident_departure_latitude,user,yes,yes,KEEP,mapped,departure_place_mapping: schema:latitude,Precision rule: P5-1.
-Incident departure,longitude,data_incident_departure_longitude,user,yes,yes,KEEP,mapped,departure_place_mapping: schema:longitude,Precision rule: P5-1.
-Incident departure,name,data_incident_departure_name,user,departure only,no,RESTORE in form,mapped,departure_place_mapping: schema:name,
-Incident departure,type,data_incident_departure_type,user,yes,yes,KEEP,mapped,departure_place_mapping: cdm:locationType,"Mapped to cdm:locationType (was schema:description, which mixed it with the description)."
-Incident departure,description,data_incident_departure_description,user,yes,no,RESTORE in form,mapped,departure_place_mapping: schema:description,
-Incident departure,date,data_incident_departure_date,user,no,yes,NEW field,mapped,departure_place_mapping: cdm:departureDate,"Date of departure / arrival. New-form field, not in the CDM."
-Incident destination,country,data_incident_destination_country,user,yes,yes,KEEP,mapped,destination_place_mapping: schema:addressCountry,
-Incident destination,state,data_incident_destination_state,user,yes,no,RESTORE in form,mapped,destination_place_mapping: schema:addressRegion,
-Incident destination,town,data_incident_destination_town,user,yes,yes (merged with village),KEEP,mapped,destination_place_mapping: schema:addressLocality,New form merged town and village into one box; split again so village is its own field.
-Incident destination,village,data_incident_destination_village,user,yes,no,RESTORE in form,mapped,destination_place_mapping: cdm:village,
-Incident destination,latitude,data_incident_destination_latitude,user,yes,yes,KEEP,mapped,destination_place_mapping: schema:latitude,Precision rule: P5-1.
-Incident destination,longitude,data_incident_destination_longitude,user,yes,yes,KEEP,mapped,destination_place_mapping: schema:longitude,Precision rule: P5-1.
-Incident destination,name,data_incident_destination_name,user,departure only,no,NEW field,mapped,destination_place_mapping: schema:name,
-Incident destination,type,data_incident_destination_type,user,yes,yes,KEEP,mapped,destination_place_mapping: cdm:locationType,"Mapped to cdm:locationType (was schema:description, which mixed it with the description)."
-Incident destination,description,data_incident_destination_description,user,yes,no,RESTORE in form,mapped,destination_place_mapping: schema:description,
-Incident destination,date,data_incident_destination_date,user,no,yes,NEW field,mapped,destination_place_mapping: cdm:arrivalDate,"Date of departure / arrival. New-form field, not in the CDM."
-Trafficker,trafficker_id,data_trafficker_trafficker_id,generated,typed,no,GENERATE: one ID per record (not shared across records),mapped,case_mapping: cdm:hasTrafficker | trafficker_mapping: schema:Identifier | trafficker_mapping: (node name),DECIDE: linking the same trafficker across records is unreliable from free text; ask experts if they want it.
-Trafficker,number_of_traffickers,data_trafficker_number_of_traffickers,user,no,yes,NEW field,mapped,trafficker_mapping: schema:Number,DECIDE: one name/nationality/description describes the whole group; is that acceptable?
-Trafficker,name,data_trafficker_name,user,yes,yes,KEEP,mapped,trafficker_mapping: schema:Name,
-Trafficker,nationality,data_trafficker_nationality,user,yes,yes,KEEP,mapped,trafficker_mapping: schema:Nationality,
-Trafficker,description,data_trafficker_description,user,yes,yes,KEEP,mapped,trafficker_mapping: schema:Description,Free text; privacy review (P5-2).
+Record,record_id,data_record_record_id,generated,typed,no,GENERATE server-side,mapped,incident_core: (node name) | incident_core: schema:location | incident_core: prov:wasGeneratedBy | departure_place_core: (node name) | destination_place_core: (node name) | transformation_activity: (node name) | transformation_activity: prov:generated | incident_trafficking: (node name) | incident_trafficking: cdm:recordId | incident_trafficking: cdm:departureLocation | incident_trafficking: cdm:destinationLocation | incident_trafficking: schema:mainEntityOfPage | report_topic: dcterms:subject | victim_details: cdm:currentLocation | victim_current_place: (node name) | departure_place_details: (node name) | destination_place_details: (node name) | publication_mapping: (node name) | publication_mapping: schema:identifier,Today a typed text box. The new app already creates IDs like R-0137; use one scheme for the whole pipeline (see P3-6 uniqueness).
+Record,source_id,data_record_source_id,from login,typed in sidebar,no,GENERATE: take from logged-in user,mapped,incident_core: hds:reportedBy | reporter_agent: (node name) | reporter_agent: dcterms:identifier | transformation_activity: prov:wasAssociatedWith,Mapped in P4 (HDS core and application mapping).
+Record,topic_id,data_record_topic_id,from topic,n/a,implicit,NEW field,mapped,incident_trafficking: dcterms:isPartOf | report_topic: (node name) | report_topic: dcterms:identifier,Mapped in P4 (HDS core and application mapping).
+Record,title,data_record_title,user,n/a,yes,NEW field,mapped,incident_core: rdfs:label,Record name; proposed schema:name.
+Record,narrative,data_record_narrative,user,n/a,yes,NEW field,mapped,incident_core: dcterms:description,Free text; proposed schema:description. Privacy review needed (P5-2).
+Record,date_received,data_record_date_received,user,yes,no,RESTORE in form,mapped,incident_trafficking: cdm:dateReceived,
+Record,date_recorded,data_record_date_recorded,generated,"form only, NOT in payload",no,GENERATE: set to submission time,mapped,incident_trafficking: cdm:dateRecorded,"Old form asked for it but never put it in the JSON, so it never reached the CDM. Make it automatic."
+Record,report_language,data_record_report_language,user,no,no,DECIDE: add a language dropdown?,mapped,incident_trafficking: schema:inLanguage,"In the CDM (en; ti) but in no form, no JSON and no YAML."
+Record,corrects,data_record_corrects,from correction flow,n/a,implicit,NEW field,mapped,incident_trafficking: prov:wasRevisionOf,Mapped in P4 (HDS core and application mapping).
+Record,correction_reason,data_record_correction_reason,user,n/a,yes,NEW field,mapped,incident_trafficking: cdm:correctionReason,Mapped in P4 (HDS core and application mapping).
+Victim,victim_id,data_victim_victim_id,generated,typed,no,GENERATE server-side,mapped,incident_core: hds:involves | victim_agent: (node name) | victim_agent: schema:identifier | victim_details: (node name),Name of the victim node in RDF. Generated per record.
+Victim,number_of_victims,data_victim_number_of_victims,user,yes,yes,KEEP,mapped,incident_core: hds:victimCount,
+Victim,nationality,data_victim_nationality,user,yes,yes,KEEP,mapped,victim_details: schema:nationality,
+Victim,gender,data_victim_gender,user,yes,yes,KEEP,mapped,victim_details: schema:gender,
+Victim,age,data_victim_age,user,yes,yes,KEEP,mapped,victim_details: cdm:age,
+Victim,situation,data_victim_situation,user,yes,yes,KEEP,mapped,victim_details: cdm:situation,
+Victim,description,data_victim_description,user,yes,no,RESTORE in form,mapped,victim_details: schema:description,Free text; privacy review (P5-2).
+Victim current location,country,data_victim_current_location_country,user,yes,no,RESTORE in form,mapped,victim_current_place: schema:addressCountry,"Restore for all topics (decision: add everywhere, hide per topic later)."
+Victim current location,state,data_victim_current_location_state,user,yes,no,RESTORE in form,mapped,victim_current_place: schema:addressRegion,"Restore for all topics (decision: add everywhere, hide per topic later)."
+Victim current location,town,data_victim_current_location_town,user,yes,no,RESTORE in form,mapped,victim_current_place: schema:addressLocality,"Restore for all topics (decision: add everywhere, hide per topic later)."
+Victim current location,village,data_victim_current_location_village,user,yes,no,RESTORE in form,mapped,victim_current_place: cdm:village,"Restore for all topics (decision: add everywhere, hide per topic later)."
+Victim current location,latitude,data_victim_current_location_latitude,user,yes,no,RESTORE in form,mapped,victim_current_place: schema:latitude,"Restore for all topics (decision: add everywhere, hide per topic later). Coordinate precision: P5-1."
+Victim current location,longitude,data_victim_current_location_longitude,user,yes,no,RESTORE in form,mapped,victim_current_place: schema:longitude,"Restore for all topics (decision: add everywhere, hide per topic later). Coordinate precision: P5-1."
+Incident,incident_id,data_incident_incident_id,generated,typed,no,GENERATE server-side,mapped,incident_core: dcterms:identifier,
+Incident departure,country,data_incident_departure_country,user,yes,yes,KEEP,mapped,departure_place_core: schema:addressCountry,
+Incident departure,state,data_incident_departure_state,user,yes,no,RESTORE in form,mapped,departure_place_core: schema:addressRegion,
+Incident departure,town,data_incident_departure_town,user,yes,yes (merged with village),KEEP,mapped,departure_place_core: schema:addressLocality,New form merged town and village into one box; split again so village is its own field.
+Incident departure,village,data_incident_departure_village,user,yes,no,RESTORE in form,mapped,departure_place_details: cdm:village,
+Incident departure,latitude,data_incident_departure_latitude,user,yes,yes,KEEP,mapped,departure_place_core: schema:latitude,Precision rule: P5-1.
+Incident departure,longitude,data_incident_departure_longitude,user,yes,yes,KEEP,mapped,departure_place_core: schema:longitude,Precision rule: P5-1.
+Incident departure,name,data_incident_departure_name,user,departure only,no,RESTORE in form,mapped,departure_place_core: rdfs:label,
+Incident departure,type,data_incident_departure_type,user,yes,yes,KEEP,mapped,departure_place_details: cdm:locationType,"Mapped to cdm:locationType (was schema:description, which mixed it with the description)."
+Incident departure,description,data_incident_departure_description,user,yes,no,RESTORE in form,mapped,departure_place_core: dcterms:description,
+Incident departure,date,data_incident_departure_date,user,no,yes,NEW field,mapped,incident_core: schema:startDate | departure_place_details: cdm:departureDate,"Date of departure / arrival. New-form field, not in the CDM."
+Incident destination,country,data_incident_destination_country,user,yes,yes,KEEP,mapped,destination_place_core: schema:addressCountry,
+Incident destination,state,data_incident_destination_state,user,yes,no,RESTORE in form,mapped,destination_place_core: schema:addressRegion,
+Incident destination,town,data_incident_destination_town,user,yes,yes (merged with village),KEEP,mapped,destination_place_core: schema:addressLocality,New form merged town and village into one box; split again so village is its own field.
+Incident destination,village,data_incident_destination_village,user,yes,no,RESTORE in form,mapped,destination_place_details: cdm:village,
+Incident destination,latitude,data_incident_destination_latitude,user,yes,yes,KEEP,mapped,destination_place_core: schema:latitude,Precision rule: P5-1.
+Incident destination,longitude,data_incident_destination_longitude,user,yes,yes,KEEP,mapped,destination_place_core: schema:longitude,Precision rule: P5-1.
+Incident destination,name,data_incident_destination_name,user,departure only,no,NEW field,mapped,destination_place_core: rdfs:label,
+Incident destination,type,data_incident_destination_type,user,yes,yes,KEEP,mapped,destination_place_details: cdm:locationType,"Mapped to cdm:locationType (was schema:description, which mixed it with the description)."
+Incident destination,description,data_incident_destination_description,user,yes,no,RESTORE in form,mapped,destination_place_core: dcterms:description,
+Incident destination,date,data_incident_destination_date,user,no,yes,NEW field,mapped,incident_core: schema:endDate | destination_place_details: cdm:arrivalDate,"Date of departure / arrival. New-form field, not in the CDM."
+Trafficker,trafficker_id,data_trafficker_trafficker_id,generated,typed,no,GENERATE: one ID per record (not shared across records),mapped,incident_core: hds:involves | trafficker_agent: (node name) | trafficker_agent: schema:identifier | trafficker_details: (node name),DECIDE: linking the same trafficker across records is unreliable from free text; ask experts if they want it.
+Trafficker,number_of_traffickers,data_trafficker_number_of_traffickers,user,no,yes,NEW field,mapped,trafficker_details: cdm:numberOfTraffickers,DECIDE: one name/nationality/description describes the whole group; is that acceptable?
+Trafficker,name,data_trafficker_name,user,yes,yes,KEEP,mapped,trafficker_details: foaf:name,
+Trafficker,nationality,data_trafficker_nationality,user,yes,yes,KEEP,mapped,trafficker_details: schema:nationality,
+Trafficker,description,data_trafficker_description,user,yes,yes,KEEP,mapped,trafficker_details: schema:description,Free text; privacy review (P5-2).
 Publication,name,data_publication_name,user,yes,yes,KEEP,mapped,publication_mapping: schema:name,
 Publication,link,data_publication_link,user,yes,yes,KEEP,mapped,publication_mapping: schema:url,
 Publication,date,data_publication_date,user,yes,yes,KEEP,mapped,publication_mapping: schema:datePublished,

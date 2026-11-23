@@ -27,14 +27,13 @@ def load_crosswalk():
 
 
 def yaml_placeholders(path=YAML_PATH):
-    with open(path, encoding="utf-8") as fh:
-        text = fh.read()
-    cfg = yaml.safe_load(text)
+    _, mappings = mapper.load_mapping_config(path)  # core + application files, merged
     found = set()
-    for mapping in cfg["mappings"].values():
+    for mapping in mappings.values():
         found.update(re.findall(r"\$\((\w+)\)", mapping["s"]))
         for po in mapping["po"]:
-            found.update(re.findall(r"\$\((\w+)\)", str(po[1])))
+            obj = po["o"] if isinstance(po, dict) else po[1]
+            found.update(re.findall(r"\$\((\w+)\)", str(obj)))
     return found
 
 
@@ -57,7 +56,8 @@ def check_crosswalk_vs_yaml(mapped_cols, placeholders):
 
 
 # Columns the YAML may read even though the crosswalk marks them deferred (none today).
-UNMAPPED_BUT_ALLOWED = set()
+# Added by the mapper itself (provenance), not form fields.
+UNMAPPED_BUT_ALLOWED = {"meta_generated_at", "meta_mapping_version"}
 
 
 # --------------------------------------------------------------------------- tests

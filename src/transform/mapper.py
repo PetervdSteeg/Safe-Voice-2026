@@ -1,9 +1,11 @@
 # src/transform/mapper.py
 
+import hashlib
 import pandas as pd
 import re
 import os 
 import yaml 
+from datetime import datetime, timezone
 from typing import List, Tuple
 from io import StringIO
 
@@ -38,6 +40,26 @@ def substitute_placeholders(template: str, row: pd.Series) -> str:
         return safe_str(row.get(col, "")) 
     return PLACEHOLDER_RE.sub(repl, template)
 
+def placeholders_of(template) -> list:
+    """Column names used by a template, e.g. 'ex:victim_$(a)' -> ['a']."""
+    return PLACEHOLDER_RE.findall(str(template or ""))
+
+
+def has_any_value(row: pd.Series, columns) -> bool:
+    """True if at least one of the columns has a value (used by "when_any" in the mapping)."""
+    return any(safe_str(row.get(c, "")) for c in (columns or []))
+
+
+def all_filled(template, row: pd.Series) -> bool:
+    """False if a placeholder in the template is empty: a half-empty IRI like ex:victim_ is never written."""
+    return all(safe_str(row.get(c, "")) for c in placeholders_of(template))
+
+
+def normalize_datetime(value: str) -> str:
+    """xsd:dateTime needs a time part: 2026-01-05 becomes 2026-01-05T00:00:00."""
+    return value + "T00:00:00" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else value
+
+
 def expand_prefixed(iri_or_curie: str, prefixes: dict) -> str:
     """Expand CURIE like schema:Person using prefixes dict to full IRI."""
     iri_or_curie = iri_or_curie.strip()
@@ -64,6 +86,23 @@ def is_prefixed_resource(value: str, prefixes: dict) -> bool:
 
 # --- Function to Load Mapping ---
 
+def _included_paths(yml_path, yml):
+    base = os.path.dirname(yml_path)
+    return [os.path.join(base, name) for name in (yml.get("include") or [])]
+
+
+def mapping_version(yml_path=YML_MAPPING_PATH) -> str:
+    """Short fingerprint of all mapping files, recorded in the provenance of every record."""
+    digest = hashlib.sha256()
+    with open(yml_path, "rb") as f:
+        raw = f.read()
+    digest.update(raw)
+    for part_path in _included_paths(yml_path, yaml.safe_load(raw) or {}):
+        with open(part_path, "rb") as f:
+            digest.update(f.read())
+    return digest.hexdigest()[:12]
+
+
 def load_mapping_config(yml_path=YML_MAPPING_PATH):
     """Loads YARRRML prefixes and mappings from the file system."""
     
@@ -75,9 +114,21 @@ def load_mapping_config(yml_path=YML_MAPPING_PATH):
     except FileNotFoundError:
         raise FileNotFoundError(f"YARRRML mapping file not found at: {yml_path}. Check project structure.")
 
-    prefixes = yml.get("prefixes", {})
-    mappings = yml.get("mappings", {})
-    
+    prefixes = dict(yml.get("prefixes", {}) or {})
+    mappings = dict(yml.get("mappings", {}) or {})
+
+    # "include:" lists further mapping files (relative to this one): the core HDS mapping and the
+    # application mapping. A mapping name may only be defined once.
+    for part_path in _included_paths(yml_path, yml):
+        with open(part_path, "r", encoding="utf-8") as f:
+            part = yaml.safe_load(f) or {}
+        for key, value in (part.get("prefixes") or {}).items():
+            prefixes.setdefault(key, value)
+        for name, cfg in (part.get("mappings") or {}).items():
+            if name in mappings:
+                raise ValueError(f"Mapping {name!r} is defined twice (see {part_path}).")
+            mappings[name] = cfg
+
     if "rdf" not in prefixes:
         prefixes["rdf"] = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
         
@@ -94,7 +145,12 @@ def generate_triples(df: pd.DataFrame) -> str:
     
     # 1. Load configuration dynamically
     prefixes, mappings = load_mapping_config()
-    
+
+    # Provenance values the pipeline itself knows (not form fields).
+    df = df.copy()
+    df["meta_generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    df["meta_mapping_version"] = mapping_version()
+
     n_triples = []
     
     # 2. Iterate over the DataFrame
@@ -103,6 +159,11 @@ def generate_triples(df: pd.DataFrame) -> str:
         for map_name, map_cfg in mappings.items():
             subj_template = map_cfg.get("s")
             if not subj_template:
+                continue
+            # "when_any": only write this resource if the record has a value for one of the columns.
+            if map_cfg.get("when_any") and not has_any_value(row, map_cfg["when_any"]):
+                continue
+            if not all_filled(subj_template, row):
                 continue
 
             # 2a. Subject generation
@@ -123,12 +184,24 @@ def generate_triples(df: pd.DataFrame) -> str:
 
             # 2b. Predicate-Object generation
             for po in po_list:
-                if not po or len(po) < 2:
+                if not po:
                     continue
-
-                pred_raw = po[0]
-                obj_raw = po[1]
-                datatype_raw = po[2] if len(po) > 2 else None
+                if isinstance(po, dict):
+                    # {p: predicate, o: object, datatype: ..., when_any: [columns]}
+                    if po.get("p") is None or po.get("o") is None:
+                        continue
+                    pred_raw, obj_raw, datatype_raw = po["p"], po["o"], po.get("datatype")
+                    if po.get("when_any") and not has_any_value(row, po["when_any"]):
+                        continue
+                elif len(po) < 2:
+                    continue
+                else:
+                    pred_raw = po[0]
+                    obj_raw = po[1]
+                    datatype_raw = po[2] if len(po) > 2 else None
+                obj_raw = str(obj_raw)
+                if not all_filled(obj_raw, row):
+                    continue
 
                 # Predicate expansion
                 if pred_raw == "a":
@@ -151,6 +224,8 @@ def generate_triples(df: pd.DataFrame) -> str:
                     lit = escape_literal(obj_template_sub)
                     if datatype_raw:
                         dt_iri = expand_prefixed(datatype_raw, prefixes)
+                        if dt_iri.endswith("#dateTime"):
+                            lit = escape_literal(normalize_datetime(obj_template_sub))
                         obj = f"\"{lit}\"^^<{dt_iri}>"
                     else:
                         obj = f"\"{lit}\""

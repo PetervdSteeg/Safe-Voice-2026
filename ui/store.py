@@ -17,7 +17,7 @@ from contextlib import closing
 from datetime import date, datetime
 
 from src.orchestrator.payload import build_payload, payload_to_frame
-from ui import audit
+from ui import audit, secure
 
 DB_PATH = os.getenv("SAFEVOICE_DB", os.path.join("data", "app", "safevoice.db"))
 
@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS records (
     hash TEXT NOT NULL, sync_status TEXT NOT NULL, sync_message TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS idx_records_owner ON records(owner, topic_id);
 """
+
+# Coordinates are generalised to 3 decimals (about 110 m) when a record is saved (W4-02), so the
+# stored copy, the screens and the RDF all have the same precision.
+COORD_DECIMALS = 3
+_COORD_PATHS = [(*base, axis) for base in (("incident", "departure"), ("incident", "destination"),
+                                           ("victim", "current_location"))
+                for axis in ("latitude", "longitude")]
 
 # Date values inside a record's "data", stored as ISO text and turned back into dates on read.
 _DATE_PATHS = [("incident", "departure", "date"), ("incident", "destination", "date"), ("publication", "date")]
@@ -67,12 +74,32 @@ def _loads(text):
     return data
 
 
+def round_coordinates(data):
+    """Copy of a record's data with every coordinate rounded to COORD_DECIMALS."""
+    data = json.loads(_dumps(data))
+    for path in _COORD_PATHS:
+        node = data
+        for key in path[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict) and isinstance(node.get(path[-1]), (int, float)):
+            node[path[-1]] = round(node[path[-1]], COORD_DECIMALS)
+    return _loads(json.dumps(data))
+
+
 def _topic(row):
-    return {**dict(row), "created": datetime.fromisoformat(row["created"])}
+    return {**dict(row), "created": datetime.fromisoformat(row["created"]),
+            "title": secure.decrypt(row["title"]), "description": secure.decrypt(row["description"])}
 
 
 def _record(row):
-    return {**dict(row), "submitted": datetime.fromisoformat(row["submitted"]), "data": _loads(row["data"])}
+    plain = secure.decrypt(row["data"])
+    try:
+        data = _loads(plain)
+    except (ValueError, TypeError, AttributeError):  # unreadable or damaged: show nothing, the hash check fails
+        data = {}
+    return {**dict(row), "submitted": datetime.fromisoformat(row["submitted"]),
+            "title": secure.decrypt(row["title"]), "narrative": secure.decrypt(row["narrative"]),
+            "reason": secure.decrypt(row["reason"]), "data": data}
 
 
 # ---- Topics ----
@@ -96,7 +123,8 @@ def create_topic(user, title, description):
              "created": datetime.now()}
     with closing(_connect()) as db, db:
         db.execute("INSERT INTO topics VALUES (?, ?, ?, ?, ?)",
-                   (topic["id"], user, title, description, topic["created"].isoformat()))
+                   (topic["id"], user, secure.encrypt(title), secure.encrypt(description),
+                    topic["created"].isoformat()))
     audit.log(user, "topic_created", detail=topic["id"])
     return topic
 
@@ -176,6 +204,7 @@ def submit_record(user, topic_id, title, narrative, data, corrects=None, reason=
         if not original or original["topic_id"] != topic_id:
             raise PermissionError("Corrected record not found in this topic.")
 
+    data = round_coordinates(data)
     record = {"topic_id": topic_id, "owner": user, "title": title, "narrative": narrative,
               "submitted": datetime.now(), "corrects": corrects, "reason": reason, "data": data}
     while True:
@@ -184,13 +213,37 @@ def submit_record(user, topic_id, title, narrative, data, corrects=None, reason=
         try:
             with closing(_connect()) as db, db:
                 db.execute("INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (record["id"], topic_id, user, title, narrative, record["submitted"].isoformat(),
-                            corrects, reason, _dumps(data), record["hash"], NOT_SYNCED, ""))
+                           (record["id"], topic_id, user, secure.encrypt(title), secure.encrypt(narrative),
+                            record["submitted"].isoformat(), corrects, secure.encrypt(reason),
+                            secure.encrypt(_dumps(data)), record["hash"], NOT_SYNCED, ""))
             break
         except sqlite3.IntegrityError:
             continue  # ID collision (vanishingly rare): draw another
     audit.log(user, "record_submitted", record["id"], f"topic {topic_id}")
     return _sync(get_record(user, record["id"]))
+
+
+def encrypt_existing():
+    """Encrypt rows still stored as plain text. Returns (topics, records) changed. Needs SAFEVOICE_DB_KEY.
+
+    The integrity hash covers the readable content, so it stays valid.
+    """
+    if not secure.enabled():
+        raise secure.KeyMissingError("Set SAFEVOICE_DB_KEY in .env first (python -m ui.secure newkey).")
+    counts = []
+    with closing(_connect()) as db, db:
+        for table, columns in (("topics", ("title", "description")),
+                               ("records", ("title", "narrative", "reason", "data"))):
+            changed = 0
+            for row in db.execute(f"SELECT * FROM {table}").fetchall():
+                new = {c: secure.encrypt(row[c]) for c in columns if not row[c].startswith(secure.PREFIX)}
+                if new:
+                    sets = ", ".join(f"{c} = ?" for c in new)
+                    db.execute(f"UPDATE {table} SET {sets} WHERE id = ?", (*new.values(), row["id"]))
+                    changed += 1
+            counts.append(changed)
+    audit.log("system", "db_encrypted", detail=f"topics {counts[0]}, records {counts[1]}")
+    return tuple(counts)
 
 
 def run_pipeline(df):
@@ -199,13 +252,18 @@ def run_pipeline(df):
     return run_full_pipeline(df)
 
 
-def _ingest_reason():
-    """Why the last AllegroGraph upload failed (connection details only, never report content)."""
+def _failure_reason(status):
+    """Why the last upload or validation failed (settings, properties; never report content)."""
     try:
-        from src.storage import ingest
-        return ingest.last_error or ""
+        if "Ingestion" in status:
+            from src.storage import ingest
+            return ingest.last_error or ""
+        if "Validation" in status:
+            from src.validation import shacl
+            return shacl.last_report or ""
     except Exception:  # noqa: BLE001
-        return ""
+        pass
+    return ""
 
 
 def _sync(record):
@@ -218,7 +276,7 @@ def _sync(record):
         where = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
         place = f" at {os.path.basename(where.filename)}:{where.lineno}" if where else ""
         audit.log(record["owner"], "record_sync_error", record["id"], type(exc).__name__ + place)
-    reason = _ingest_reason() if "Ingestion" in status else ""
+    reason = _failure_reason(status)
     if status == "Success":
         state, message = SYNCED, ""
     elif "Ingestion" in status and reason.startswith("Missing in .env"):

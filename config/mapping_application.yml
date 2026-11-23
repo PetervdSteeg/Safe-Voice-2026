@@ -1,0 +1,149 @@
+# APPLICATION MAPPING: SafeVoice (human trafficking) specific terms.
+# Anything the shared HDS CDM has no term for lives here. To reuse the pipeline for another
+# application, replace this file; mapping_core.yml stays the same. The domain tag below also
+# decides which extra incident properties apply (see config/hds/incident-domains.ttl).
+
+x-columns:
+  departure: &departure_cols
+    - data_incident_departure_country
+    - data_incident_departure_state
+    - data_incident_departure_town
+    - data_incident_departure_village
+    - data_incident_departure_latitude
+    - data_incident_departure_longitude
+    - data_incident_departure_name
+    - data_incident_departure_type
+    - data_incident_departure_description
+    - data_incident_departure_date
+  destination: &destination_cols
+    - data_incident_destination_country
+    - data_incident_destination_state
+    - data_incident_destination_town
+    - data_incident_destination_village
+    - data_incident_destination_latitude
+    - data_incident_destination_longitude
+    - data_incident_destination_name
+    - data_incident_destination_type
+    - data_incident_destination_description
+    - data_incident_destination_date
+  victim: &victim_cols
+    - data_victim_number_of_victims
+    - data_victim_nationality
+    - data_victim_gender
+    - data_victim_age
+    - data_victim_situation
+    - data_victim_description
+    - data_victim_current_location_country
+    - data_victim_current_location_state
+    - data_victim_current_location_town
+    - data_victim_current_location_village
+    - data_victim_current_location_latitude
+    - data_victim_current_location_longitude
+  current: &current_cols
+    - data_victim_current_location_country
+    - data_victim_current_location_state
+    - data_victim_current_location_town
+    - data_victim_current_location_village
+    - data_victim_current_location_latitude
+    - data_victim_current_location_longitude
+  trafficker: &trafficker_cols
+    - data_trafficker_number_of_traffickers
+    - data_trafficker_name
+    - data_trafficker_nationality
+    - data_trafficker_description
+  publication: &publication_cols
+    - data_publication_name
+    - data_publication_link
+    - data_publication_date
+
+mappings:
+
+  # 1. The incident: SafeVoice-specific facts about it
+  incident_trafficking:
+    s: ex:incident_$(data_record_record_id)
+    po:
+      - [hds:incidentDomain, hdsDomain:humanTrafficking]
+      # The topic is a situation report (hds:Report); the record is part of it (decision to confirm).
+      - [dcterms:isPartOf, ex:report_$(data_record_topic_id)]
+      # Corrections: the HDS CDM has no term for them (decision to confirm); prov:wasRevisionOf for now.
+      - [prov:wasRevisionOf, ex:incident_$(data_record_corrects)]
+      - [cdm:correctionReason, $(data_record_correction_reason)]
+      - [cdm:recordId, $(data_record_record_id)]
+      - [cdm:dateReceived, $(data_record_date_received), xsd:date]
+      - [cdm:dateRecorded, $(data_record_date_recorded), xsd:date]
+      - [schema:inLanguage, $(data_record_report_language)]
+      # The HDS CDM has one schema:location; these say which role a place plays.
+      - {p: cdm:departureLocation, o: "ex:departure_place_$(data_record_record_id)", when_any: *departure_cols}
+      - {p: cdm:destinationLocation, o: "ex:destination_place_$(data_record_record_id)", when_any: *destination_cols}
+      - {p: schema:mainEntityOfPage, o: "ex:article_$(data_record_record_id)", when_any: *publication_cols}
+      # hds:casualties applies to human trafficking, but SafeVoice does not collect it.
+
+  # 2. The topic (situation report)
+  report_topic:
+    s: ex:report_$(data_record_topic_id)
+    po:
+      - [a, hds:Report]
+      - [dcterms:identifier, $(data_record_topic_id)]
+      - [dcterms:subject, ex:incident_$(data_record_record_id)]
+
+  # 3. Victim details (no HDS term for these)
+  victim_details:
+    s: ex:victim_$(data_victim_victim_id)
+    when_any: *victim_cols
+    po:
+      - [schema:nationality, $(data_victim_nationality)]
+      - [schema:gender, $(data_victim_gender)]
+      - [cdm:age, $(data_victim_age), xsd:integer]
+      - [cdm:situation, $(data_victim_situation)]
+      - [schema:description, $(data_victim_description)]
+      - {p: cdm:currentLocation, o: "ex:victim_current_place_$(data_record_record_id)", when_any: *current_cols}
+
+  victim_current_place:
+    s: ex:victim_current_place_$(data_record_record_id)
+    when_any: *current_cols
+    po:
+      - [a, dcterms:Location]
+      - [schema:addressCountry, $(data_victim_current_location_country)]
+      - [schema:addressRegion, $(data_victim_current_location_state)]
+      - [schema:addressLocality, $(data_victim_current_location_town)]
+      - [cdm:village, $(data_victim_current_location_village)]
+      - [schema:latitude, $(data_victim_current_location_latitude), xsd:float]
+      - [schema:longitude, $(data_victim_current_location_longitude), xsd:float]
+
+  # 4. Trafficker details
+  trafficker_details:
+    s: ex:trafficker_$(data_trafficker_trafficker_id)
+    when_any: *trafficker_cols
+    po:
+      - [foaf:name, $(data_trafficker_name)]
+      - [schema:nationality, $(data_trafficker_nationality)]
+      - [schema:description, $(data_trafficker_description)]
+      - [cdm:numberOfTraffickers, $(data_trafficker_number_of_traffickers), xsd:integer]
+
+  # 5. Place details beyond the core terms
+  departure_place_details:
+    s: ex:departure_place_$(data_record_record_id)
+    when_any: *departure_cols
+    po:
+      - [cdm:village, $(data_incident_departure_village)]
+      - [cdm:locationType, $(data_incident_departure_type)]
+      - [cdm:departureDate, $(data_incident_departure_date), xsd:date]
+
+  destination_place_details:
+    s: ex:destination_place_$(data_record_record_id)
+    when_any: *destination_cols
+    po:
+      - [cdm:village, $(data_incident_destination_village)]
+      - [cdm:locationType, $(data_incident_destination_type)]
+      - [cdm:arrivalDate, $(data_incident_destination_date), xsd:date]
+
+  # 6. Publication
+  publication_mapping:
+    s: ex:article_$(data_record_record_id)
+    when_any: *publication_cols
+    po:
+      - [a, schema:Article]
+      - [schema:identifier, $(data_record_record_id)]
+      - [schema:name, $(data_publication_name)]
+      - [schema:url, $(data_publication_link)]
+      - [schema:datePublished, $(data_publication_date), xsd:date]
