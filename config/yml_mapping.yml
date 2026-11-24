@@ -4,9 +4,8 @@ prefixes:
   schema: "http://schema.org/"
   prov: "http://www.w3.org/ns/prov#"
   xsd: "http://www.w3.org/2001/XMLSchema#"
-  # Shared HDS Common Data Model (config/hds/hds-cdm.ttl) and its incident-domain vocabulary
+  # Shared HDS Common Data Model (config/hds/hds-cdm.ttl), including the incident-domain concepts
   hds: "https://vodan-development.github.io/HDS-Centralized-Common-Data-Model/hds-cdm.ttl#"
-  hdsDomain: "https://vodan-development.github.io/HDS-Centralized-Common-Data-Model/incident-domains.ttl#"
   dcterms: "http://purl.org/dc/terms/"
   rdfs: "http://www.w3.org/2000/01/rdf-schema#"
   foaf: "http://xmlns.com/foaf/0.1/"
@@ -17,7 +16,7 @@ sources:
     referenceFormulation: csv
 
 # The mappings are split in two layers (see docs/IMPROVEMENTS.md, P4):
-#   mapping_core.yml         terms of the shared HDS CDM, the same for every HDS field lab.
+#   mapping_core.yml         ONLY terms defined in the shared HDS CDM, the same for every HDS field lab.
 #   mapping_application.yml  SafeVoice / human-trafficking specific terms. Swap or edit this
 #                            file for another application; the core file stays as it is.
 # Optional keys inside a mapping: "when_any: [columns]" emits it only if one of the columns has

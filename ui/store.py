@@ -187,7 +187,7 @@ def get_chain(user, record):
 
 def verify_record(record):
     """True if the stored content still matches the hash taken at submission (W3-05)."""
-    return audit.record_hash(record) == record["hash"]
+    return audit.hash_matches(record, record["hash"])
 
 
 def submit_record(user, topic_id, title, narrative, data, corrects=None, reason=""):
@@ -244,6 +244,52 @@ def encrypt_existing():
             counts.append(changed)
     audit.log("system", "db_encrypted", detail=f"topics {counts[0]}, records {counts[1]}")
     return tuple(counts)
+
+
+def seal_hashes():
+    """Turn plain integrity hashes into keyed ones (needs SAFEVOICE_INTEGRITY_KEY). Returns (sealed, skipped).
+
+    Only records that still match their plain hash are sealed; a record that already fails the check is
+    left alone (skipped) so tampering is not hidden by re-hashing.
+    """
+    if not audit.integrity_key():
+        raise secure.KeyMissingError("Set SAFEVOICE_INTEGRITY_KEY in .env first (python -m ui.secure newkey).")
+    sealed = skipped = 0
+    with closing(_connect()) as db, db:
+        for row in db.execute("SELECT * FROM records").fetchall():
+            if row["hash"].startswith("hmac:"):
+                continue
+            record = _record(row)
+            if audit.plain_hash(record) != row["hash"]:
+                skipped += 1
+                continue
+            db.execute("UPDATE records SET hash = ? WHERE id = ?", (audit.record_hash(record), row["id"]))
+            sealed += 1
+    audit.log("system", "hashes_sealed", detail=f"sealed {sealed}, skipped {skipped}")
+    return sealed, skipped
+
+
+def resync_all(user=None, only_unsynced=False):
+    """Send stored records through the pipeline again (for example after the mapping or the CDM changed).
+
+    All users unless `user` is given. Returns (synced, failed). The uploads ADD triples to the user's
+    graph: drop it first (python -m src.storage.admin drop-user NAME) to get rid of the old terms.
+    """
+    query, args = "SELECT * FROM records", []
+    clauses = (["owner = ?"] if user else []) + (["sync_status != 'synced'"] if only_unsynced else [])
+    if user:
+        args.append(user)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    with closing(_connect()) as db:
+        rows = db.execute(query + " ORDER BY submitted", args).fetchall()
+    synced = failed = 0
+    for row in rows:
+        result = _sync(_record(row))
+        synced += result["sync_status"] == SYNCED
+        failed += result["sync_status"] != SYNCED
+    audit.log(user or "system", "records_resynced", detail=f"synced {synced}, failed {failed}")
+    return synced, failed
 
 
 def run_pipeline(df):

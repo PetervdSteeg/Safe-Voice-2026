@@ -1,7 +1,9 @@
 # APPLICATION MAPPING: SafeVoice (human trafficking) specific terms.
-# Anything the shared HDS CDM has no term for lives here. To reuse the pipeline for another
-# application, replace this file; mapping_core.yml stays the same. The domain tag below also
-# decides which extra incident properties apply (see config/hds/incident-domains.ttl).
+# Anything the shared HDS CDM has no term for lives here: terms of other vocabularies (schema.org,
+# PROV, DCMI) and our own extension terms (cdm:..., declared in config/safevoice-extension.ttl).
+# To reuse the pipeline for another application, replace this file; mapping_core.yml stays the same.
+# The domain tag decides which extra incident properties apply (hds:applicableProperty in
+# config/hds/hds-cdm.ttl).
 
 x-columns:
   departure: &departure_cols
@@ -62,7 +64,11 @@ mappings:
   incident_trafficking:
     s: ex:incident_$(data_record_record_id)
     po:
-      - [hds:incidentDomain, hdsDomain:humanTrafficking]
+      # Incident-domain concepts are part of the CDM itself (an incident can have several domains).
+      - [hds:incidentDomain, hds:humanTrafficking]
+      - [dcterms:identifier, $(data_incident_incident_id)]
+      # Provenance (extension, to confirm): which transformation produced this incident.
+      - [prov:wasGeneratedBy, ex:transformation_$(data_record_record_id)]
       # The topic is a situation report (hds:Report); the record is part of it (decision to confirm).
       - [dcterms:isPartOf, ex:report_$(data_record_topic_id)]
       # Corrections: the HDS CDM has no term for them (decision to confirm); prov:wasRevisionOf for now.
@@ -84,13 +90,16 @@ mappings:
     po:
       - [a, hds:Report]
       - [dcterms:identifier, $(data_record_topic_id)]
-      - [dcterms:subject, ex:incident_$(data_record_record_id)]
+      # The incident points to its report with dcterms:isPartOf (see incident_trafficking); the
+      # CDM has no link from the report to its incidents.
 
   # 3. Victim details (no HDS term for these)
   victim_details:
     s: ex:victim_$(data_victim_victim_id)
     when_any: *victim_cols
     po:
+      - [a, schema:Person]
+      - [schema:identifier, $(data_victim_victim_id)]
       - [schema:nationality, $(data_victim_nationality)]
       - [schema:gender, $(data_victim_gender)]
       - [cdm:age, $(data_victim_age), xsd:integer]
@@ -115,16 +124,23 @@ mappings:
     s: ex:trafficker_$(data_trafficker_trafficker_id)
     when_any: *trafficker_cols
     po:
-      - [foaf:name, $(data_trafficker_name)]
+      - [a, schema:Person]
+      - [schema:identifier, $(data_trafficker_trafficker_id)]
       - [schema:nationality, $(data_trafficker_nationality)]
       - [schema:description, $(data_trafficker_description)]
       - [cdm:numberOfTraffickers, $(data_trafficker_number_of_traffickers), xsd:integer]
 
-  # 5. Place details beyond the core terms
+  # 5. Place details beyond the core terms (the CDM only gives a Location a label)
   departure_place_details:
     s: ex:departure_place_$(data_record_record_id)
     when_any: *departure_cols
     po:
+      - [dcterms:description, $(data_incident_departure_description)]
+      - [schema:addressCountry, $(data_incident_departure_country)]
+      - [schema:addressRegion, $(data_incident_departure_state)]
+      - [schema:addressLocality, $(data_incident_departure_town)]
+      - [schema:latitude, $(data_incident_departure_latitude), xsd:float]
+      - [schema:longitude, $(data_incident_departure_longitude), xsd:float]
       - [cdm:village, $(data_incident_departure_village)]
       - [cdm:locationType, $(data_incident_departure_type)]
       - [cdm:departureDate, $(data_incident_departure_date), xsd:date]
@@ -133,6 +149,12 @@ mappings:
     s: ex:destination_place_$(data_record_record_id)
     when_any: *destination_cols
     po:
+      - [dcterms:description, $(data_incident_destination_description)]
+      - [schema:addressCountry, $(data_incident_destination_country)]
+      - [schema:addressRegion, $(data_incident_destination_state)]
+      - [schema:addressLocality, $(data_incident_destination_town)]
+      - [schema:latitude, $(data_incident_destination_latitude), xsd:float]
+      - [schema:longitude, $(data_incident_destination_longitude), xsd:float]
       - [cdm:village, $(data_incident_destination_village)]
       - [cdm:locationType, $(data_incident_destination_type)]
       - [cdm:arrivalDate, $(data_incident_destination_date), xsd:date]
@@ -147,3 +169,20 @@ mappings:
       - [schema:name, $(data_publication_name)]
       - [schema:url, $(data_publication_link)]
       - [schema:datePublished, $(data_publication_date), xsd:date]
+
+  # 7. Who reported it: a pseudonymous user name (extension; the CDM only has the agent type)
+  reporter_details:
+    s: ex:agent_$(data_record_source_id)
+    po:
+      - [dcterms:identifier, $(data_record_source_id)]
+
+  # 8. Provenance of the transformation (extension, to confirm): agent, time and mapping version.
+  # meta_generated_at and meta_mapping_version are added by the mapper, not read from the form.
+  transformation_activity:
+    s: ex:transformation_$(data_record_record_id)
+    po:
+      - [a, prov:Activity]
+      - [prov:generated, ex:incident_$(data_record_record_id)]
+      - [prov:wasAssociatedWith, ex:agent_$(data_record_source_id)]
+      - [prov:endedAtTime, $(meta_generated_at), xsd:dateTime]
+      - [cdm:mappingVersion, $(meta_mapping_version)]

@@ -1,0 +1,80 @@
+@prefix cdm: <https://w3id.org/dsip/cdm/> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix hds: <https://vodan-development.github.io/HDS-Centralized-Common-Data-Model/hds-cdm.ttl#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix schema: <http://schema.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# SafeVoice extension of the HDS Common Data Model: terms that are specific to this application
+# (human-trafficking source reporting). Proposed to the HDS team through the FieldLab fork; none of
+# these terms may be moved into the core mapping. Every cdm: term used in config/mapping_*.yml must be
+# declared here (tests/test_hds_mapping.py checks this).
+
+<https://w3id.org/dsip/cdm/>
+    a owl:Ontology ;
+    rdfs:label "SafeVoice extension of the HDS CDM"@en ;
+    rdfs:comment "Application-specific terms of the SafeVoice field lab. Draft: to be reviewed by the HDS team."@en .
+
+# ---- Locations ----
+cdm:departureLocation a owl:ObjectProperty ;
+    rdfs:label "departure location"@en ;
+    rdfs:comment "Role of a location on an incident: where the journey started. A sub-property of schema:location; both are written because the CDM has a single location property."@en ;
+    rdfs:subPropertyOf schema:location ;
+    rdfs:domain hds:Incident .
+cdm:destinationLocation a owl:ObjectProperty ;
+    rdfs:label "destination location"@en ;
+    rdfs:comment "Role of a location on an incident: where the journey ended or was meant to end. A sub-property of schema:location."@en ;
+    rdfs:subPropertyOf schema:location ;
+    rdfs:domain hds:Incident .
+cdm:currentLocation a owl:ObjectProperty ;
+    rdfs:label "current location"@en ;
+    rdfs:comment "Where a victim currently is."@en ;
+    rdfs:domain prov:Agent .
+cdm:village a owl:DatatypeProperty ;
+    rdfs:label "village"@en ;
+    rdfs:range xsd:string .
+cdm:locationType a owl:DatatypeProperty ;
+    rdfs:label "location type"@en ;
+    rdfs:comment "Free choice from a drop-down, for example refugee or IDP camp, human trafficking or smuggling camp."@en ;
+    rdfs:range xsd:string .
+cdm:departureDate a owl:DatatypeProperty ;
+    rdfs:label "departure date"@en ;
+    rdfs:range xsd:date .
+cdm:arrivalDate a owl:DatatypeProperty ;
+    rdfs:label "arrival date"@en ;
+    rdfs:range xsd:date .
+
+# ---- People ----
+cdm:age a owl:DatatypeProperty ;
+    rdfs:label "age"@en ;
+    rdfs:comment "Age of the victim in years."@en ;
+    rdfs:range xsd:integer .
+cdm:situation a owl:DatatypeProperty ;
+    rdfs:label "situation"@en ;
+    rdfs:comment "Situation of the victim, for example in captivity or en route."@en ;
+    rdfs:range xsd:string .
+cdm:numberOfTraffickers a owl:DatatypeProperty ;
+    rdfs:label "number of traffickers"@en ;
+    rdfs:range xsd:integer .
+
+# ---- Record keeping ----
+cdm:recordId a owl:DatatypeProperty ;
+    rdfs:label "record ID"@en ;
+    rdfs:comment "Identifier of the submitted record in the SafeVoice application."@en ;
+    rdfs:range xsd:string .
+cdm:dateReceived a owl:DatatypeProperty ;
+    rdfs:label "date received"@en ;
+    rdfs:range xsd:date .
+cdm:dateRecorded a owl:DatatypeProperty ;
+    rdfs:label "date recorded"@en ;
+    rdfs:range xsd:date .
+cdm:correctionReason a owl:DatatypeProperty ;
+    rdfs:label "correction reason"@en ;
+    rdfs:comment "Why a record was corrected. Used together with prov:wasRevisionOf, which points to the incident it corrects."@en ;
+    rdfs:range xsd:string .
+cdm:mappingVersion a owl:DatatypeProperty ;
+    rdfs:label "mapping version"@en ;
+    rdfs:comment "Fingerprint of the mapping files that produced the data (see prov:Activity)."@en ;
+    rdfs:range xsd:string .

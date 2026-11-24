@@ -4,8 +4,9 @@ Titles, narratives, correction reasons and the structured data are stored as Fer
 ("enc:v1:..."). The key is SAFEVOICE_DB_KEY in .env. Without a key, new data is stored as plain
 text (as before) and existing plain rows stay readable, so switching it on is safe.
 
-    python -m ui.secure newkey     make a key to put in .env
+    python -m ui.secure newkey     make keys to put in .env (database key and integrity key)
     python -m ui.secure migrate    encrypt rows that are still stored as plain text
+    python -m ui.secure sealhash   turn the plain integrity hashes into keyed ones (SAFEVOICE_INTEGRITY_KEY)
 
 Keep the key apart from the database file and back it up: without it encrypted rows cannot be read.
 This protects the file at rest; it does not replace disk encryption by the host (W4-04).
@@ -68,10 +69,14 @@ if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command == "newkey":
         from cryptography.fernet import Fernet
-        print("Add this line to .env (and keep a backup of the key somewhere safe):")
+        print("Add these lines to .env (and keep a backup of the keys somewhere safe):")
         print(f"SAFEVOICE_DB_KEY={Fernet.generate_key().decode()}")
+        print(f"SAFEVOICE_INTEGRITY_KEY={Fernet.generate_key().decode()}")
     elif command == "migrate":
         from ui import store
         print("Encrypted rows: %d topics, %d records." % store.encrypt_existing())
+    elif command == "sealhash":
+        from ui import store
+        print("Sealed %d record hashes; %d skipped (already failing the check)." % store.seal_hashes())
     else:
         print(__doc__)

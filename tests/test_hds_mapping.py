@@ -14,7 +14,6 @@ from src.transform import mapper
 from src.validation import shacl
 
 HDS = Namespace("https://vodan-development.github.io/HDS-Centralized-Common-Data-Model/hds-cdm.ttl#")
-DOMAIN = Namespace("https://vodan-development.github.io/HDS-Centralized-Common-Data-Model/incident-domains.ttl#")
 EX = Namespace("https://w3id.org/dsip/eepa/")
 SCHEMA = Namespace("http://schema.org/")
 PROV = Namespace("http://www.w3.org/ns/prov#")
@@ -46,7 +45,7 @@ def test_core_terms_follow_the_hds_cdm():
     _, g = _graph(FULL)
     inc = EX["incident_R-AB12CD34EF"]
     assert (inc, RDF.type, HDS.Incident) in g
-    assert (inc, HDS.incidentDomain, DOMAIN.humanTrafficking) in g
+    assert (inc, HDS.incidentDomain, HDS.humanTrafficking) in g
     assert (inc, HDS.reportedBy, EX.agent_alice) in g and (EX.agent_alice, RDF.type, PROV.Agent) in g
     assert (inc, HDS.victimCount, Literal(3, datatype=XSD.integer)) in g
     assert (inc, SCHEMA.startDate, Literal("2026-01-05T00:00:00", datatype=XSD.dateTime)) in g
@@ -172,4 +171,4 @@ def test_core_and_application_layers_are_separate_files():
     core = mapper.yaml.safe_load(open("config/mapping_core.yml", encoding="utf-8"))["mappings"]
     app = mapper.yaml.safe_load(open("config/mapping_application.yml", encoding="utf-8"))["mappings"]
     assert set(core) | set(app) == set(mappings) and not set(core) & set(app)
-    assert "hdsDomain:humanTrafficking" in str(app) and "hdsDomain" not in str(core)  # the domain tag is application-specific
+    assert "hds:humanTrafficking" in str(app) and "humanTrafficking" not in str(core)  # the domain tag is application-specific

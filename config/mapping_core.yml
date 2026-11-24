@@ -1,8 +1,10 @@
-# CORE HDS MAPPING: terms from the shared HDS Common Data Model (config/hds/hds-cdm.ttl).
+# CORE HDS MAPPING: ONLY terms defined in the shared HDS Common Data Model (config/hds/hds-cdm.ttl).
 # Every HDS field lab maps to these terms, so queries work across labs. Change this file only
-# when the shared CDM changes. SafeVoice-specific terms live in mapping_application.yml.
+# when the shared CDM changes (tests/test_hds_mapping.py fails if a term outside the CDM is added).
+# Everything else (identifiers, coordinates, provenance, SafeVoice terms) is in mapping_application.yml.
 #
 # Not written yet, because no value has been agreed: hds:confidentiality, hds:status.
+# Not collected: hds:casualties (applies to human trafficking), hds:outcome, hds:weaponsUsed.
 
 # Column lists below are reused with YAML anchors (&name / *name).
 x-columns:
@@ -56,7 +58,6 @@ mappings:
       - [a, hds:Incident]
       - [rdfs:label, $(data_record_title)]
       - [dcterms:description, $(data_record_narrative)]
-      - [dcterms:identifier, $(data_incident_incident_id)]
       - [schema:startDate, $(data_incident_departure_date), xsd:dateTime]
       - [schema:endDate, $(data_incident_destination_date), xsd:dateTime]
       - [hds:victimCount, $(data_victim_number_of_victims), xsd:integer]
@@ -65,14 +66,12 @@ mappings:
       - {p: hds:involves, o: "ex:trafficker_$(data_trafficker_trafficker_id)", when_any: *trafficker_cols}
       - {p: "schema:location", o: "ex:departure_place_$(data_record_record_id)", when_any: *departure_cols}
       - {p: "schema:location", o: "ex:destination_place_$(data_record_record_id)", when_any: *destination_cols}
-      - [prov:wasGeneratedBy, ex:transformation_$(data_record_record_id)]
 
   # 2. Who reported it: the logged-in user (replaces the old constant ex:EEPA)
   reporter_agent:
     s: ex:agent_$(data_record_source_id)
     po:
       - [a, prov:Agent]
-      - [dcterms:identifier, $(data_record_source_id)]
 
   # 3. People involved
   victim_agent:
@@ -80,32 +79,24 @@ mappings:
     when_any: *victim_cols
     po:
       - [a, prov:Agent]
-      - [a, schema:Person]
       - [hds:actorType, victim]
-      - [schema:identifier, $(data_victim_victim_id)]
 
   trafficker_agent:
     s: ex:trafficker_$(data_trafficker_trafficker_id)
     when_any: *trafficker_cols
     po:
       - [a, prov:Agent]
-      - [a, schema:Person]
       - [hds:actorType, trafficker]
-      - [schema:identifier, $(data_trafficker_trafficker_id)]
+      - [foaf:name, $(data_trafficker_name)]
 
-  # 4. Places (departure and destination); only created when the record has data for them
+  # 4. Places (departure and destination); the CDM only gives a Location a label.
+  # Only created when the record has data for them.
   departure_place_core:
     s: ex:departure_place_$(data_record_record_id)
     when_any: *departure_cols
     po:
       - [a, dcterms:Location]
       - [rdfs:label, $(data_incident_departure_name)]
-      - [dcterms:description, $(data_incident_departure_description)]
-      - [schema:addressCountry, $(data_incident_departure_country)]
-      - [schema:addressRegion, $(data_incident_departure_state)]
-      - [schema:addressLocality, $(data_incident_departure_town)]
-      - [schema:latitude, $(data_incident_departure_latitude), xsd:float]
-      - [schema:longitude, $(data_incident_departure_longitude), xsd:float]
 
   destination_place_core:
     s: ex:destination_place_$(data_record_record_id)
@@ -113,20 +104,3 @@ mappings:
     po:
       - [a, dcterms:Location]
       - [rdfs:label, $(data_incident_destination_name)]
-      - [dcterms:description, $(data_incident_destination_description)]
-      - [schema:addressCountry, $(data_incident_destination_country)]
-      - [schema:addressRegion, $(data_incident_destination_state)]
-      - [schema:addressLocality, $(data_incident_destination_town)]
-      - [schema:latitude, $(data_incident_destination_latitude), xsd:float]
-      - [schema:longitude, $(data_incident_destination_longitude), xsd:float]
-
-  # 5. Provenance: which transformation produced this incident, for whom, when, with which mapping.
-  # meta_generated_at and meta_mapping_version are added by the mapper, not read from the form.
-  transformation_activity:
-    s: ex:transformation_$(data_record_record_id)
-    po:
-      - [a, prov:Activity]
-      - [prov:generated, ex:incident_$(data_record_record_id)]
-      - [prov:wasAssociatedWith, ex:agent_$(data_record_source_id)]
-      - [prov:endedAtTime, $(meta_generated_at), xsd:dateTime]
-      - [cdm:mappingVersion, $(meta_mapping_version)]

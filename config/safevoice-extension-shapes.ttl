@@ -1,0 +1,43 @@
+@prefix cdm: <https://w3id.org/dsip/cdm/> .
+@prefix svshapes: <https://w3id.org/dsip/cdm/shapes#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix hds: <https://vodan-development.github.io/HDS-Centralized-Common-Data-Model/hds-cdm.ttl#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix schema: <http://schema.org/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Value types for the SafeVoice extension terms (config/safevoice-extension.ttl). Like the HDS shapes,
+# all properties are optional; these shapes only check types.
+
+svshapes:IncidentExtensionShape a sh:NodeShape ;
+    sh:targetClass hds:Incident ;
+    sh:property [ sh:path cdm:departureLocation ; sh:class dcterms:Location ] ;
+    sh:property [ sh:path cdm:destinationLocation ; sh:class dcterms:Location ] ;
+    sh:property [ sh:path cdm:dateReceived ; sh:datatype xsd:date ] ;
+    sh:property [ sh:path cdm:dateRecorded ; sh:datatype xsd:date ] ;
+    sh:property [ sh:path cdm:recordId ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path cdm:correctionReason ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path prov:wasRevisionOf ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path prov:wasGeneratedBy ; sh:class prov:Activity ] .
+
+svshapes:PersonExtensionShape a sh:NodeShape ;
+    sh:targetClass prov:Agent ;
+    sh:property [ sh:path cdm:age ; sh:datatype xsd:integer ; sh:minInclusive 0 ; sh:maxInclusive 120 ] ;
+    sh:property [ sh:path cdm:situation ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path cdm:numberOfTraffickers ; sh:datatype xsd:integer ; sh:minInclusive 1 ] ;
+    sh:property [ sh:path cdm:currentLocation ; sh:class dcterms:Location ] .
+
+svshapes:LocationExtensionShape a sh:NodeShape ;
+    sh:targetClass dcterms:Location ;
+    sh:property [ sh:path cdm:village ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path cdm:locationType ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path cdm:departureDate ; sh:datatype xsd:date ] ;
+    sh:property [ sh:path cdm:arrivalDate ; sh:datatype xsd:date ] ;
+    sh:property [ sh:path schema:latitude ; sh:datatype xsd:float ; sh:minInclusive -90 ; sh:maxInclusive 90 ] ;
+    sh:property [ sh:path schema:longitude ; sh:datatype xsd:float ; sh:minInclusive -180 ; sh:maxInclusive 180 ] .
+
+svshapes:ActivityShape a sh:NodeShape ;
+    sh:targetClass prov:Activity ;
+    sh:property [ sh:path prov:endedAtTime ; sh:datatype xsd:dateTime ] ;
+    sh:property [ sh:path cdm:mappingVersion ; sh:datatype xsd:string ] .

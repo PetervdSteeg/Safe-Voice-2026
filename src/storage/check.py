@@ -54,7 +54,13 @@ def check_dry_run():
         triples = mapper.generate_triples(cleaned)
         if not triples:
             return _report(False, "2. pipeline dry run (clean + RDF, no upload)", "no triples were generated")
-        return _report(True, "2. pipeline dry run (clean + RDF, no upload)", f"{len(triples.splitlines())} triples generated")
+        from rdflib import Graph
+        from src.validation import shacl
+        conforms, problems = shacl.validate_graph(Graph().parse(data=triples, format="nt"))
+        if not conforms:
+            return _report(False, "2. pipeline dry run (clean + RDF, no upload)", f"the graph does not conform to the HDS shapes: {problems}")
+        return _report(True, "2. pipeline dry run (clean + RDF, no upload)",
+                       f"{len(triples.splitlines())} triples generated, conform to the HDS shapes")
     except Exception as exc:  # noqa: BLE001
         return _report(False, "2. pipeline dry run (clean + RDF, no upload)", f"{type(exc).__name__}: {exc}")
 
